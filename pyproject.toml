@@ -1,0 +1,45 @@
+[project]
+name = "z4j-rq"
+version = "1.0.1"
+description = "z4j RQ queue engine adapter (Apache 2.0)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "z4j contributors" }]
+keywords = ["z4j", "rq", "redis", "task", "queue"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Distributed Computing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "z4j-core",
+    # ``rq`` already declares its own ``redis`` floor
+    # (``redis!=6,>=3.5`` as of rq 2.8); we defer to that instead of
+    # duplicating a pin. Duplicating creates install conflicts with
+    # sibling adapters that cap redis differently (arq caps at <6;
+    # see z4j-arq), which pip cannot resolve when both are installed.
+    "rq>=2.8.0",
+]
+
+[project.urls]
+Changelog = "https://github.com/z4jdev/z4j-rq/blob/main/CHANGELOG.md"
+Documentation = "https://z4j.dev"
+Homepage = "https://z4j.com"
+Issues = "https://github.com/z4jdev/z4j-rq/issues"
+Source = "https://github.com/z4jdev/z4j-rq"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/z4j_rq"]
