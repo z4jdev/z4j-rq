@@ -1,6 +1,6 @@
 [project]
 name = "z4j-rq"
-version = "1.0.1"
+version = "1.1.2"
 description = "z4j RQ queue engine adapter (Apache 2.0)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,6 +29,14 @@ dependencies = [
     # see z4j-arq), which pip cannot resolve when both are installed.
     "rq>=2.8.0",
 ]
+
+[project.scripts]
+# 1.1.2+ console script. Both ``z4j-rq`` (pip-installed entry
+# point) and ``python -m z4j_rq`` (module form) work and
+# dispatch to the same code path. Engine adapters are libraries,
+# so the CLI is doctor / check / status / version only - no
+# ``run`` or ``restart`` (those belong to framework adapters).
+z4j-rq = "z4j_rq.cli:main"
 
 [project.urls]
 Changelog = "https://github.com/z4jdev/z4j-rq/blob/main/CHANGELOG.md"
