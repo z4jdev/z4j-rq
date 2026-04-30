@@ -1,6 +1,6 @@
 [project]
 name = "z4j-rq"
-version = "1.1.2"
+version = "1.3.0"
 description = "z4j RQ queue engine adapter (Apache 2.0)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,7 +21,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "z4j-core",
+    "z4j-core>=1.3.0,<2",
     # ``rq`` already declares its own ``redis`` floor
     # (``redis!=6,>=3.5`` as of rq 2.8); we defer to that instead of
     # duplicating a pin. Duplicating creates install conflicts with
