@@ -50,7 +50,7 @@ async def test_schedule_fire_end_to_end_through_dispatcher(
     engine = RqEngineAdapter(rq_app=rq_app)
     dispatcher = CommandDispatcher(
         engines={"rq": engine},
-        schedulers={},  # no scheduler adapter — proves the fix works
+        schedulers={},  # no scheduler adapter, proves the fix works
         buffer=buf,
     )
 
