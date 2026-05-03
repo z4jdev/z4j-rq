@@ -1,8 +1,8 @@
 # z4j-rq
 
-[![PyPI version](https://img.shields.io/pypi/v/z4j-rq.svg)](https://pypi.org/project/z4j-rq/)
-[![Python](https://img.shields.io/pypi/pyversions/z4j-rq.svg)](https://pypi.org/project/z4j-rq/)
-[![License](https://img.shields.io/pypi/l/z4j-rq.svg)](https://github.com/z4jdev/z4j-rq/blob/main/LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/z4j-rq.svg?v=1.4.0)](https://pypi.org/project/z4j-rq/)
+[![Python](https://img.shields.io/pypi/pyversions/z4j-rq.svg?v=1.4.0)](https://pypi.org/project/z4j-rq/)
+[![License](https://img.shields.io/pypi/l/z4j-rq.svg?v=1.4.0)](https://github.com/z4jdev/z4j-rq/blob/main/LICENSE)
 
 The RQ engine adapter for [z4j](https://z4j.com).
 
