@@ -6,7 +6,7 @@
 
 The RQ engine adapter for [z4j](https://z4j.com).
 
-Streams every RQ job lifecycle event from your workers to the z4j brain
+Streams every RQ job lifecycle event from your workers to z4j
 and accepts operator control actions from the dashboard. Pair with
 z4j-rqscheduler to manage periodic schedules.
 
@@ -44,7 +44,7 @@ pip install z4j-bare    z4j-rq z4j-rqscheduler   # framework-free worker
 
 - No exception from the adapter ever propagates back into your RQ
   workers or job hooks.
-- Events buffer locally when the brain is unreachable; workers never
+- Events buffer locally when z4j is unreachable; workers never
   block on network I/O.
 
 ## Documentation
