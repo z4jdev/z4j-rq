@@ -33,7 +33,7 @@ from z4j_core.models import TaskDefinition
 
 from z4j_rq.events.mapper import RQ_ENGINE_NAME
 
-logger = logging.getLogger("z4j.agent.rq.discovery")
+logger = logging.getLogger("z4j.adapter.rq.discovery")
 
 # How many jobs to walk per registry. RQ registries can hold
 # millions of finished-job ids; we don't need a complete history,

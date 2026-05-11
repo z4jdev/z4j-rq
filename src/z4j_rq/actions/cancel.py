@@ -26,7 +26,7 @@ from typing import Any
 
 from z4j_core.models import CommandResult
 
-logger = logging.getLogger("z4j.agent.rq.actions.cancel")
+logger = logging.getLogger("z4j.adapter.rq.actions.cancel")
 
 
 async def cancel_task_action(rq_app: Any, *, task_id: str) -> CommandResult:

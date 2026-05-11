@@ -56,7 +56,7 @@ from z4j_rq.events.callbacks import uninstall as uninstall_callbacks
 from z4j_rq.events.mapper import RQ_ENGINE_NAME
 from z4j_rq.events.worker_wrap import RqWorkerHook
 
-logger = logging.getLogger("z4j.agent.rq.engine")
+logger = logging.getLogger("z4j.adapter.rq.engine")
 
 
 class RqEngineAdapter:

@@ -40,7 +40,7 @@ from z4j_core.redaction.engine import RedactionEngine
 
 from z4j_rq.events.mapper import build_event
 
-logger = logging.getLogger("z4j.agent.rq.callbacks")
+logger = logging.getLogger("z4j.adapter.rq.callbacks")
 
 # Sink + redaction engine the engine adapter installs. Callbacks
 # are RQ-supplied - they don't get adapter context - so we stash

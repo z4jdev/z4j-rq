@@ -25,7 +25,7 @@ from typing import Any
 
 from z4j_core.models import CommandResult
 
-logger = logging.getLogger("z4j.agent.rq.actions.purge")
+logger = logging.getLogger("z4j.adapter.rq.actions.purge")
 
 _DEFAULT_THRESHOLD = 10_000
 

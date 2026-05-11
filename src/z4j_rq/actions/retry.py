@@ -28,9 +28,9 @@ from typing import Any
 
 from z4j_core.models import CommandResult
 
-logger = logging.getLogger("z4j.agent.rq.actions.retry")
+logger = logging.getLogger("z4j.adapter.rq.actions.retry")
 
-# Same bounds as Celery (audit H14): refuse ETAs that fall outside a
+# Same bounds as Celery: refuse ETAs that fall outside a
 # sane window before they reach the broker. Negative ETAs are
 # allowed up to -60 s for clock-skew tolerance; positive ETAs are
 # capped at one year.

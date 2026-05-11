@@ -21,7 +21,7 @@ from z4j_rq.engine import RqEngineAdapter
 from z4j_rq.meta import TaskMeta, z4j_meta
 from z4j_rq.worker_bootstrap import register_worker_bootstrap
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 __all__ = [
     "RqEngineAdapter",

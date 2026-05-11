@@ -28,7 +28,7 @@ import logging
 import os
 from typing import Any
 
-logger = logging.getLogger("z4j.agent.rq.bootstrap")
+logger = logging.getLogger("z4j.adapter.rq.bootstrap")
 
 
 def register_worker_bootstrap() -> None:

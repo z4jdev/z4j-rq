@@ -29,7 +29,7 @@ from z4j_core.models import CommandResult
 
 from z4j_rq.actions.retry import retry_task_action
 
-logger = logging.getLogger("z4j.agent.rq.actions.bulk_retry")
+logger = logging.getLogger("z4j.adapter.rq.actions.bulk_retry")
 
 # Hard ceiling matching the brain-side cap. If the caller passes a
 # ``max`` larger than this we clamp and mark ``capped: True``.
