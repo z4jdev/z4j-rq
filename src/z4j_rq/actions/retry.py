@@ -1,9 +1,29 @@
 """``retry`` action - re-enqueue an RQ Job.
 
 RQ's retry surface is conceptually simple: fetch the Job by id,
-read its function reference + args + kwargs, and ``Queue.enqueue``
-a fresh job with the same shape on the original queue (or a
-caller-overridden queue).
+take a brain-supplied function reference, and ``Queue.enqueue`` a
+fresh job with caller-supplied args + kwargs on the original
+queue (or a caller-overridden queue).
+
+Security (R7 H-2 + R8 H-1): we **never** read ``job.args``,
+``job.kwargs``, ``job.func_name``, or ``job.instance`` from the
+stored Job. RQ stores all four inside a single pickle blob (see
+``rq.job.Job._deserialize_data``) and lazy-loads them on first
+attribute access. Inside the agent process - which holds the HMAC
+signing key for the brain transport - that deserialization is
+arbitrary code execution from anyone who can write to the Redis
+backing store.
+
+The retry path therefore *requires* brain-supplied ``task_name``
+(replacing ``job.func_name``) AND ``override_args`` /
+``override_kwargs`` (replacing ``job.args`` / ``job.kwargs``).
+If any of the three is missing we fail closed with
+:class:`RetryUnsafeError` rather than silently triggering the
+pickle load.
+
+R7 H-2 closed args/kwargs. R8 H-1 closed func_name/instance after
+the Codex round-8 audit found ``queue.enqueue_call(func=job.func_name, ...)``
+still triggered the lazy-pickle path even with args/kwargs gated.
 
 Edge cases handled:
 
@@ -30,6 +50,21 @@ from z4j_core.models import CommandResult
 
 logger = logging.getLogger("z4j.adapter.rq.actions.retry")
 
+
+class RetryUnsafeError(Exception):
+    """Raised when a retry is attempted without brain-supplied safe inputs.
+
+    The retry surface refuses to read ``job.args``, ``job.kwargs``,
+    ``job.func_name``, or ``job.instance`` because RQ packs all four
+    inside a single pickle blob; loading any of them would
+    deserialize attacker-controlled data inside the agent process.
+    The brain MUST supply ``task_name`` (replacing ``func_name``)
+    AND ``override_args`` AND ``override_kwargs`` so the retry runs
+    with operator-vetted inputs only. See R7 audit finding H-2 (args /
+    kwargs closure) and R8 audit finding H-1 (func_name / instance
+    closure).
+    """
+
 # Same bounds as Celery: refuse ETAs that fall outside a
 # sane window before they reach the broker. Negative ETAs are
 # allowed up to -60 s for clock-skew tolerance; positive ETAs are
@@ -42,6 +77,7 @@ async def retry_task_action(
     rq_app: Any,
     *,
     task_id: str,
+    task_name: str | None = None,
     override_args: tuple[Any, ...] | None = None,
     override_kwargs: dict[str, Any] | None = None,
     eta: float | None = None,
@@ -54,6 +90,12 @@ async def retry_task_action(
     OR ``.queues`` so we can resolve the destination queue. Tests
     pass a minimal fake; production passes the redis ``Connection``
     or the user-supplied ``rq.Queue`` instance.
+
+    ``task_name`` is the dotted import path of the callable to
+    enqueue (e.g. ``"myapp.tasks.send_email"``), supplied by the brain
+    from the original task observation captured at ``task.received``.
+    It replaces ``job.func_name`` which RQ lazy-deserializes from
+    pickle - see module docstring R8 H-1.
     """
     job = await _fetch_job(rq_app, task_id)
     if job is None:
@@ -80,11 +122,40 @@ async def retry_task_action(
             error=f"could not resolve queue for job {task_id!r}",
         )
 
+    # R7 H-2 + R8 H-1 fail-closed: every value the retry needs MUST
+    # come from the brain. Reading any of job.func_name, job.args,
+    # job.kwargs, job.instance triggers RQ's lazy pickle deserialization
+    # inside the agent process - the RCE vector. An empty tuple / empty
+    # dict for override_* counts as "supplied" (operator chose to retry
+    # with no arguments) but task_name must be a non-empty string.
+    if not task_name:
+        return CommandResult(
+            status="failed",
+            error=(
+                f"refusing to retry job {task_id!r}: missing brain-supplied "
+                "task_name. RQ stores job.func_name inside the same pickle "
+                "blob as args/kwargs; the agent will not deserialize that "
+                "blob to recover the function reference. The brain must "
+                "forward task_name from its observed task record. "
+                "See R8 audit H-1."
+            ),
+        )
+    if override_args is None or override_kwargs is None:
+        return CommandResult(
+            status="failed",
+            error=(
+                f"refusing to retry job {task_id!r}: missing brain-supplied "
+                "override_args / override_kwargs. RQ stores job args as "
+                "pickle by default; the agent will not deserialize them. "
+                "See R7 audit H-2."
+            ),
+        )
+
     try:
         new_job = queue.enqueue_call(
-            func=job.func_name,
-            args=tuple(override_args) if override_args is not None else tuple(job.args),
-            kwargs=dict(override_kwargs) if override_kwargs is not None else dict(job.kwargs),
+            func=task_name,
+            args=tuple(override_args),
+            kwargs=dict(override_kwargs),
         )
     except Exception as exc:  # noqa: BLE001
         return CommandResult(status="failed", error=f"retry failed: {exc}")
@@ -204,4 +275,4 @@ def _resolve_queue(rq_app: Any, job: Any) -> Any | None:
         return None
 
 
-__all__ = ["retry_task_action"]
+__all__ = ["RetryUnsafeError", "retry_task_action"]

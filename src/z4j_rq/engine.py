@@ -401,14 +401,21 @@ class RqEngineAdapter:
         self,
         task_id: str,
         *,
+        task_name: str | None = None,
         override_args: tuple[Any, ...] | None = None,
         override_kwargs: dict[str, Any] | None = None,
         eta: float | None = None,
         priority: object = None,
     ) -> CommandResult:
+        # R8 H-1: brain-supplied task_name replaces job.func_name
+        # (which would lazy-load pickle from the broker). The action
+        # itself fails closed if task_name is empty - the dispatcher
+        # already populates it from the original task observation,
+        # so an empty value here means the brain never saw the task.
         return await retry_task_action(
             self.rq_app,
             task_id=task_id,
+            task_name=task_name,
             override_args=override_args,
             override_kwargs=override_kwargs,
             eta=eta,
@@ -444,8 +451,21 @@ class RqEngineAdapter:
             max=max,
         )
 
-    async def requeue_dead_letter(self, task_id: str) -> CommandResult:
-        return await requeue_dead_letter_action(self.rq_app, task_id=task_id)
+    async def requeue_dead_letter(
+        self,
+        task_id: str,
+        *,
+        task_name: str | None = None,
+        override_args: tuple[Any, ...] | None = None,
+        override_kwargs: dict[str, Any] | None = None,
+    ) -> CommandResult:
+        return await requeue_dead_letter_action(
+            self.rq_app,
+            task_id=task_id,
+            task_name=task_name,
+            override_args=override_args,
+            override_kwargs=override_kwargs,
+        )
 
     # Honest absences below - these stay as loud failures because
     # the engine literally cannot perform them. capabilities() omits

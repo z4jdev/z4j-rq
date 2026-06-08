@@ -1,14 +1,21 @@
 # z4j-rq
 
-[![PyPI version](https://img.shields.io/pypi/v/z4j-rq.svg?v=1.4.0)](https://pypi.org/project/z4j-rq/)
-[![Python](https://img.shields.io/pypi/pyversions/z4j-rq.svg?v=1.4.0)](https://pypi.org/project/z4j-rq/)
-[![License](https://img.shields.io/pypi/l/z4j-rq.svg?v=1.4.0)](https://github.com/z4jdev/z4j-rq/blob/main/LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/z4j-rq.svg?v=1.6.7)](https://pypi.org/project/z4j-rq/)
+[![Python](https://img.shields.io/pypi/pyversions/z4j-rq.svg?v=1.6.7)](https://pypi.org/project/z4j-rq/)
+[![License](https://img.shields.io/pypi/l/z4j-rq.svg?v=1.6.7)](https://github.com/z4jdev/z4j-rq/blob/main/LICENSE)
 
 The RQ engine adapter for [z4j](https://z4j.com).
 
 Streams every RQ job lifecycle event from your workers to z4j
 and accepts operator control actions from the dashboard. Pair with
 z4j-rqscheduler to manage periodic schedules.
+
+## Compatibility
+
+- RQ 1.10+ and <3 (capped below the RQ 3.0 breaking-major rewrite)
+- Python 3.10+
+
+Full per-adapter matrix at <https://z4j.dev/reference/compatibility/>.
 
 ## What it ships
 

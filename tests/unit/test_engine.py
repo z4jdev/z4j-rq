@@ -103,9 +103,19 @@ class TestUnsupportedActionsReportHonestly:
 
     @pytest.mark.asyncio
     async def test_dlq_now_succeeds(self, rq_app, queued_job):
-        """Promoted from honest-absence to shipped feature in v2026.5."""
+        """Promoted from honest-absence to shipped feature in v2026.5.
+
+        R7 H-2 + R8 H-1: the fallback path requires brain-supplied
+        task_name AND overrides because it routes through
+        retry_task_action.
+        """
         adapter = RqEngineAdapter(rq_app=rq_app)
-        result = await adapter.requeue_dead_letter(queued_job.id)
+        result = await adapter.requeue_dead_letter(
+            queued_job.id,
+            task_name="myapp.tasks.send_email",
+            override_args=(),
+            override_kwargs={},
+        )
         assert result.status == "success"
 
     @pytest.mark.asyncio

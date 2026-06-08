@@ -1,9 +1,9 @@
 [project]
 name = "z4j-rq"
-version = "1.6.0"
+version = "1.6.7"
 description = "z4j RQ queue engine adapter (Apache 2.0)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "z4j contributors" }]
 keywords = ["z4j", "rq", "redis", "task", "queue"]
@@ -13,6 +13,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -27,7 +28,19 @@ dependencies = [
     # duplicating a pin. Duplicating creates install conflicts with
     # sibling adapters that cap redis differently (arq caps at <6;
     # see z4j-arq), which pip cannot resolve when both are installed.
-    "rq>=2.8.0",
+    #
+    # RQ compatibility policy (operator-chosen primary, wide range):
+    # every rq API z4j-rq touches (FailedJobRegistry.requeue,
+    # Queue.enqueue_call with string func, Job.fetch with connection=,
+    # get_current_job, send_stop_job_command, BaseWorker.perform_job
+    # hook) has been stable since RQ 1.x. send_stop_job_command landed
+    # in 1.4; >=1.10 gives comfortable headroom and catches the
+    # RQ 1.15/1.16 deployed majority. The R8-H1 fix swapped
+    # ``func=job.func_name`` for ``func=task_name``; Queue.enqueue_call
+    # has accepted a string func forever, so the security closure works
+    # against any 1.x+ RQ. ``<3`` guards a future 3.0 break; 2.x is
+    # currently the latest line and works fine.
+    "rq>=1.10,<3",
 ]
 
 [project.scripts]

@@ -21,8 +21,11 @@ Security notes:
 
 from __future__ import annotations
 
+import functools
+import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from z4j_core.models import Event, EventKind
@@ -30,9 +33,123 @@ from z4j_core.redaction.engine import RedactionEngine
 
 from z4j_rq.meta import TaskMeta, get_meta
 
+logger = logging.getLogger("z4j.adapter.rq.events.mapper")
+
 # Engine name string used in every RQ-emitted event. Kept in this
 # module so the engine and the events package stay decoupled.
 RQ_ENGINE_NAME = "rq"
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+# R7 H-2 plus R8 H-1: every field RQ lazy-deserializes off the
+# stored pickle blob. Reading ANY of these on a Job that was
+# fetched fresh from Redis (not loaded by a worker) triggers
+# ``rq.job.Job._deserialize_data`` which calls
+# ``self.serializer.loads(self.data)`` - pickle.loads on attacker-
+# controlled bytes, inside the agent process, which holds the
+# HMAC signing key. R7 H-2 closed ``args`` / ``kwargs`` only;
+# R8 H-1 added ``func_name`` and ``instance`` after the Codex
+# round-8 audit found ``retry_task_action`` still passed
+# ``job.func_name`` into ``queue.enqueue_call`` despite the
+# args/kwargs gate above it.
+_PICKLE_FIELDS_FULL: frozenset[str] = frozenset(
+    {"args", "kwargs", "func_name", "instance"},
+)
+
+# Subset the event-extraction path is allowed to enforce. ``build_event``
+# legitimately reads ``func_name`` for the event payload (the worker
+# has already deserialized the job by the time this runs - we read a
+# Python attribute on already-loaded state, not a fresh pickle.loads).
+# We still forbid ``args`` / ``kwargs`` so future drift on the
+# event path can't quietly re-open the hole.
+_PICKLE_FIELDS_EVENT_SAFE: frozenset[str] = frozenset({"args", "kwargs"})
+
+
+class _PickleFieldAccessTripwire:
+    """Wraps a Job and raises on reads of any forbidden pickle field.
+
+    Reading any of ``args`` / ``kwargs`` / ``func_name`` / ``instance``
+    on a real ``rq.job.Job`` (when the job has not already been
+    worker-loaded) triggers RQ's lazy pickle deserialization of
+    attacker-controlled bytes inside the agent process. The exact
+    forbidden set is configurable so the event-extraction path
+    (which legitimately needs ``func_name`` post-deserialization) can
+    use a narrower set than the retry path (which must never touch
+    any of the four).
+
+    See R7 H-2 (args/kwargs closed) and R8 H-1 (func_name closure).
+    """
+
+    __slots__ = ("_wrapped", "_forbidden")
+
+    def __init__(
+        self,
+        wrapped: Any,
+        forbidden: frozenset[str] = _PICKLE_FIELDS_FULL,
+    ) -> None:
+        object.__setattr__(self, "_wrapped", wrapped)
+        object.__setattr__(self, "_forbidden", forbidden)
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self._forbidden:
+            raise AssertionError(
+                f"forbidden read of job.{name} on a tripwire-wrapped Job - "
+                f"RQ stores {name} inside the same pickle blob as args / "
+                "kwargs / func_name / instance, and the agent must never "
+                "deserialize that blob (R7 H-2, R8 H-1). If you genuinely "
+                "need this value, route it through brain-supplied "
+                "parameters (task_name / override_args / override_kwargs) "
+                "and never via the stored Job."
+            )
+        return getattr(self._wrapped, name)
+
+
+# Backwards-compatible alias - the class was renamed in 1.6.7 to
+# reflect its broader scope (R8 H-1 added two more forbidden fields).
+# External code importing the old name keeps working.
+_ArgsKwargsAccessTripwire = _PickleFieldAccessTripwire
+
+
+def assert_no_args_kwargs_access(fn: _F) -> _F:
+    """Decorator: fail loudly if ``fn`` reads forbidden Job pickle fields.
+
+    Applied to functions that take a ``job`` keyword argument and run
+    on the event-extraction path (where ``func_name`` is a legitimate
+    payload field but ``args`` / ``kwargs`` are not). For the retry
+    path - which must never touch ANY of the four fields - use the
+    stricter ``assert_no_pickle_field_access`` decorator below.
+
+    R7 H-2 promoted this from a docstring promise to a runtime check.
+    R8 H-1 kept the name (event-path semantics unchanged) and added
+    the stricter sibling for the retry path.
+    """
+
+    @functools.wraps(fn)
+    def _guarded(*args: Any, **kwargs: Any) -> Any:
+        if "job" in kwargs and kwargs["job"] is not None:
+            kwargs = {
+                **kwargs,
+                "job": _PickleFieldAccessTripwire(
+                    kwargs["job"],
+                    forbidden=_PICKLE_FIELDS_EVENT_SAFE,
+                ),
+            }
+        return fn(*args, **kwargs)
+
+    return _guarded  # type: ignore[return-value]
+
+
+def make_strict_tripwire(job: Any) -> Any:
+    """Return a Job-shaped proxy that forbids reads of all 4 pickle fields.
+
+    Use in retry-path tests to assert ``retry_task_action`` /
+    ``bulk_retry_action`` / ``requeue_dead_letter_action`` never read
+    ``args`` / ``kwargs`` / ``func_name`` / ``instance``. The proxy
+    forwards every other attribute access to the wrapped object, so
+    safe reads (``id``, ``origin``, ``get_status``) keep working.
+    """
+    return _PickleFieldAccessTripwire(job, forbidden=_PICKLE_FIELDS_FULL)
 
 # Maximum length we ever forward for ``job.description`` and the
 # exception summary. RQ has no limit - a pathological task could
@@ -43,6 +160,7 @@ _MAX_DESCRIPTION_BYTES = 4096
 _MAX_EXC_SUMMARY_BYTES = 4096
 
 
+@assert_no_args_kwargs_access
 def build_event(
     *,
     kind: EventKind,
@@ -208,4 +326,9 @@ def _resolve_occurred_at(kind: EventKind, job: Any) -> datetime:
     return datetime.now(UTC)
 
 
-__all__ = ["RQ_ENGINE_NAME", "build_event"]
+__all__ = [
+    "RQ_ENGINE_NAME",
+    "assert_no_args_kwargs_access",
+    "build_event",
+    "make_strict_tripwire",
+]

@@ -9,25 +9,36 @@ import pytest
 from z4j_rq.actions.cancel import cancel_task_action
 from z4j_rq.actions.purge import purge_queue_action
 from z4j_rq.actions.retry import retry_task_action
+from z4j_rq.events.mapper import make_strict_tripwire
 
 
 class TestRetry:
     @pytest.mark.asyncio
     async def test_retry_queued_job_creates_new_job(self, rq_app, queued_job):
-        result = await retry_task_action(rq_app, task_id=queued_job.id)
+        # R7 H-2 + R8 H-1: brain MUST supply task_name, override_args, override_kwargs.
+        result = await retry_task_action(
+            rq_app,
+            task_id=queued_job.id,
+            task_name="myapp.tasks.send_email",
+            override_args=("u-1",),
+            override_kwargs={"email": "x@example.com"},
+        )
         assert result.status == "success"
         assert result.result["previous_task_id"] == queued_job.id
         assert result.result["task_id"].startswith("new-")
-        # New job re-uses the same args/kwargs
         queue = rq_app.queue_for_name(queued_job.origin)
-        assert queue.enqueue_calls[-1]["args"] == queued_job.args
-        assert queue.enqueue_calls[-1]["kwargs"] == queued_job.kwargs
+        assert queue.enqueue_calls[-1]["args"] == ("u-1",)
+        assert queue.enqueue_calls[-1]["kwargs"] == {"email": "x@example.com"}
+        # R8 H-1: enqueue must use the brain-supplied task_name, not
+        # job.func_name (which would lazy-pickle-load).
+        assert queue.enqueue_calls[-1]["func"] == "myapp.tasks.send_email"
 
     @pytest.mark.asyncio
     async def test_retry_overrides_args_kwargs(self, rq_app, queued_job):
         result = await retry_task_action(
             rq_app,
             task_id=queued_job.id,
+            task_name="myapp.tasks.send_email",
             override_args=("u-2",),
             override_kwargs={"email": "y@example.com"},
         )
@@ -53,7 +64,12 @@ class TestRetry:
     async def test_retry_eta_too_far_past_refused(self, rq_app, queued_job):
         far_past = time.time() - 600  # 10 minutes ago
         result = await retry_task_action(
-            rq_app, task_id=queued_job.id, eta=far_past,
+            rq_app,
+            task_id=queued_job.id,
+            task_name="myapp.tasks.send_email",
+            override_args=(),
+            override_kwargs={},
+            eta=far_past,
         )
         assert result.status == "failed"
         assert "past" in result.error.lower()
@@ -62,10 +78,130 @@ class TestRetry:
     async def test_retry_eta_too_far_future_refused(self, rq_app, queued_job):
         far_future = time.time() + 86400 * 400  # 400 days
         result = await retry_task_action(
-            rq_app, task_id=queued_job.id, eta=far_future,
+            rq_app,
+            task_id=queued_job.id,
+            task_name="myapp.tasks.send_email",
+            override_args=(),
+            override_kwargs={},
+            eta=far_future,
         )
         assert result.status == "failed"
         assert "future" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_retry_refuses_without_brain_supplied_args_r7_h2(
+        self, rq_app, queued_job,
+    ):
+        """R7 H-2 regression: omitting overrides must fail closed.
+
+        Reading job.args / job.kwargs in the agent process would
+        deserialize attacker-controlled pickle bytes (RCE). The
+        retry action must refuse rather than silently pickle-load.
+        """
+        result = await retry_task_action(
+            rq_app,
+            task_id=queued_job.id,
+            task_name="myapp.tasks.send_email",
+        )
+        assert result.status == "failed"
+        assert "override_args" in result.error
+        assert "override_kwargs" in result.error
+        assert "pickle" in result.error.lower()
+        # Nothing was enqueued.
+        queue = rq_app.queue_for_name(queued_job.origin)
+        assert queue.enqueue_calls == []
+
+    @pytest.mark.asyncio
+    async def test_retry_accepts_brain_supplied_args_r7_h2(
+        self, rq_app, queued_job,
+    ):
+        """R7 H-2 regression: the override path is the only safe path."""
+        result = await retry_task_action(
+            rq_app,
+            task_id=queued_job.id,
+            task_name="myapp.tasks.send_email",
+            override_args=("safe-arg",),
+            override_kwargs={"safe": True},
+        )
+        assert result.status == "success"
+        queue = rq_app.queue_for_name(queued_job.origin)
+        assert queue.enqueue_calls[-1]["args"] == ("safe-arg",)
+        assert queue.enqueue_calls[-1]["kwargs"] == {"safe": True}
+        # Empty overrides count as "explicitly supplied" - the
+        # operator chose to retry with no inputs.
+        rq_app2_job = queued_job  # reuse same job; new enqueue id will differ
+        result_empty = await retry_task_action(
+            rq_app,
+            task_id=rq_app2_job.id,
+            task_name="myapp.tasks.send_email",
+            override_args=(),
+            override_kwargs={},
+        )
+        assert result_empty.status == "success"
+        assert queue.enqueue_calls[-1]["args"] == ()
+        assert queue.enqueue_calls[-1]["kwargs"] == {}
+
+    @pytest.mark.asyncio
+    async def test_retry_refuses_without_brain_supplied_task_name_r8_h1(
+        self, rq_app, queued_job,
+    ):
+        """R8 H-1 regression: omitting task_name must fail closed.
+
+        Reading job.func_name in the agent process triggers RQ's
+        ``_deserialize_data`` (same pickle blob as args/kwargs). The
+        retry action must refuse rather than fall back to the stored
+        ``job.func_name``.
+        """
+        result = await retry_task_action(
+            rq_app,
+            task_id=queued_job.id,
+            override_args=("safe",),
+            override_kwargs={"safe": True},
+            # task_name intentionally absent
+        )
+        assert result.status == "failed"
+        assert "task_name" in result.error
+        assert "pickle" in result.error.lower()
+        queue = rq_app.queue_for_name(queued_job.origin)
+        assert queue.enqueue_calls == []
+
+    @pytest.mark.asyncio
+    async def test_retry_refuses_empty_task_name_r8_h1(self, rq_app, queued_job):
+        """R8 H-1: empty string task_name is rejected like None."""
+        result = await retry_task_action(
+            rq_app,
+            task_id=queued_job.id,
+            task_name="",
+            override_args=(),
+            override_kwargs={},
+        )
+        assert result.status == "failed"
+        assert "task_name" in result.error
+
+    @pytest.mark.asyncio
+    async def test_retry_never_reads_pickle_fields_r8_h1(
+        self, rq_app, queued_job,
+    ):
+        """R8 H-1 regression: retry must never read any of the four
+        pickle-load-trigger fields on the fetched Job.
+
+        Wraps the registered Job in a tripwire proxy that raises
+        ``AssertionError`` on any read of ``args`` / ``kwargs`` /
+        ``func_name`` / ``instance``. The retry path must succeed
+        without tripping any of them; if a future change reads any
+        of those fields the proxy raises and this test fails loudly.
+        """
+        rq_app._jobs[queued_job.id] = make_strict_tripwire(queued_job)
+        result = await retry_task_action(
+            rq_app,
+            task_id=queued_job.id,
+            task_name="myapp.tasks.send_email",
+            override_args=("u-1",),
+            override_kwargs={"email": "x@example.com"},
+        )
+        assert result.status == "success"
+        queue = rq_app.queue_for_name(queued_job.origin)
+        assert queue.enqueue_calls[-1]["func"] == "myapp.tasks.send_email"
 
 
 class TestCancel:
