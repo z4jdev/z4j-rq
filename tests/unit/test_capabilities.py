@@ -14,15 +14,18 @@ def test_default_capabilities_frozen() -> None:
     # v2026.5 GA capability set - see docs/MULTI_ENGINE_PLAN.md §5.
     # ``bulk_retry`` and ``requeue_dead_letter`` were originally
     # deferred but round-2 landed them in time for release.
-    assert DEFAULT_CAPABILITIES == frozenset(
-        {
-            "submit_task",
-            "retry_task",
-            "cancel_task",
-            "purge_queue",
-            "bulk_retry",
-            "requeue_dead_letter",
-        },
+    assert (
+        frozenset(
+            {
+                "submit_task",
+                "retry_task",
+                "cancel_task",
+                "purge_queue",
+                "bulk_retry",
+                "requeue_dead_letter",
+            },
+        )
+        == DEFAULT_CAPABILITIES
     )
 
 

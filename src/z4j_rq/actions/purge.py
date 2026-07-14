@@ -1,10 +1,14 @@
 """``purge_queue`` action - empty an RQ queue.
 
-Mirror of the Celery purge action's safety properties (audit H13):
+Mirror of the Celery purge action's safety properties (audit H13 / M-7):
 
-- The brain attaches a ``confirm_token = SHA-256(queue_name + depth)``
-  to every purge command. The adapter recomputes that locally
-  against the *current* depth and rejects the action on mismatch.
+- The brain attaches a ``confirm_token`` -- a keyed
+  ``HMAC(project_secret, "purge|queue|depth")`` (see
+  ``z4j_core.purge_token``) -- to every purge command. The adapter
+  recomputes it locally against the *current* depth + its own
+  per-project secret and rejects the action on mismatch. Keying (M-7)
+  means a depth-observer cannot forge or refresh a token. A pre-1.7
+  unkeyed token is accepted during a grace window (with a warning).
 - ``force=True`` bypasses both the token check and the depth-
   threshold guard. Reserved for emergency tooling.
 - The ``Z4J_PURGE_THRESHOLD`` env var caps the depth above which
@@ -18,16 +22,36 @@ fetched into a worker - those continue to run.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from typing import Any
 
 from z4j_core.models import CommandResult
+from z4j_core.purge_token import (
+    accept_legacy_from_env,
+    verify_purge_confirm_token,
+)
+from z4j_core.transport.hmac import decode_agent_hmac_secret
 
 logger = logging.getLogger("z4j.adapter.rq.actions.purge")
 
 _DEFAULT_THRESHOLD = 10_000
+
+
+def _resolve_agent_secret() -> bytes | None:
+    """Raw per-project secret for keying the confirm token, or None.
+
+    Reads + decodes ``Z4J_HMAC_SECRET`` the same way frame signing does;
+    None (absent/undecodable) leaves only the legacy unkeyed token
+    verifiable during the grace window.
+    """
+    raw = os.environ.get("Z4J_HMAC_SECRET")
+    if not raw:
+        return None
+    try:
+        return decode_agent_hmac_secret(raw)
+    except ValueError:
+        return None
 
 
 async def purge_queue_action(
@@ -47,7 +71,7 @@ async def purge_queue_action(
 
     try:
         depth = int(getattr(queue, "count", 0) or 0)
-    except Exception:  # noqa: BLE001
+    except Exception:
         depth = 0
 
     if not force:
@@ -61,8 +85,14 @@ async def purge_queue_action(
                     f"with force=true if this is intentional."
                 ),
             )
-        expected_token = _derive_token(queue_name, depth)
-        if not confirm_token or confirm_token != expected_token:
+        accepted, used_legacy = verify_purge_confirm_token(
+            provided=confirm_token or "",
+            queue_name=queue_name,
+            queue_depth=depth,
+            secret=_resolve_agent_secret(),
+            accept_legacy=accept_legacy_from_env(),
+        )
+        if not accepted:
             return CommandResult(
                 status="failed",
                 error=(
@@ -70,10 +100,18 @@ async def purge_queue_action(
                     "may have changed); re-issue from the dashboard"
                 ),
             )
+        if used_legacy:
+            logger.warning(
+                "z4j purge_queue: accepted a LEGACY unkeyed confirm_token "
+                "for queue %r -- the issuer is pre-1.7. Upgrade the brain "
+                "so it sends a keyed HMAC token; legacy acceptance is "
+                "removed in a future release.",
+                queue_name,
+            )
 
     try:
         queue.empty()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return CommandResult(status="failed", error=f"purge failed: {exc}")
     return CommandResult(
         status="success",
@@ -87,7 +125,7 @@ def _resolve_queue(rq_app: Any, queue_name: str) -> Any | None:
     if callable(factory):
         try:
             return factory(queue_name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
     try:
         from rq import Queue  # type: ignore[import-not-found]
@@ -100,14 +138,8 @@ def _resolve_queue(rq_app: Any, queue_name: str) -> Any | None:
         return None
     try:
         return Queue(name=queue_name, connection=connection)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
-
-
-def _derive_token(queue_name: str, depth: int) -> str:
-    """SHA-256 over ``queue_name||depth`` - same shape as the brain emits."""
-    payload = f"{queue_name}|{depth}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
 
 
 def _threshold() -> int:

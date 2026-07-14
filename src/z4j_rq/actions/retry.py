@@ -34,10 +34,12 @@ Edge cases handled:
   audit log is unambiguous.
 - **Job is currently running.** RQ has no "wait then retry" primitive.
   We refuse the retry rather than enqueue a duplicate.
-- **eta override.** RQ supports a ``scheduled_for`` argument via
-  ``rq-scheduler``, but the base RQ package does not. We reject
-  ``eta`` with a clear error if rq-scheduler isn't available rather
-  than silently dropping the schedule.
+- **eta override.** A validated (in-bounds) ``eta`` schedules the
+  retry for that time via RQ's native scheduled-job path
+  (``create_job(status=SCHEDULED)`` + ``schedule_job``), not an
+  immediate enqueue. Out-of-bounds etas (>60 s in the past, >1 y in
+  the future) are refused with a clear error. RQ's built-in scheduler
+  (or a scheduler-enabled worker) picks the job up at its time.
 """
 
 from __future__ import annotations
@@ -65,6 +67,7 @@ class RetryUnsafeError(Exception):
     closure).
     """
 
+
 # Same bounds as Celery: refuse ETAs that fall outside a
 # sane window before they reach the broker. Negative ETAs are
 # allowed up to -60 s for clock-skew tolerance; positive ETAs are
@@ -73,7 +76,7 @@ _ETA_MIN = timedelta(seconds=-60)
 _ETA_MAX = timedelta(days=365)
 
 
-async def retry_task_action(
+async def retry_task_action(  # noqa: PLR0911  engine fallbacks
     rq_app: Any,
     *,
     task_id: str,
@@ -81,7 +84,7 @@ async def retry_task_action(
     override_args: tuple[Any, ...] | None = None,
     override_kwargs: dict[str, Any] | None = None,
     eta: float | None = None,
-    priority: object = None,  # noqa: ARG001  (RQ has no per-job priority)
+    priority: object = None,
 ) -> CommandResult:
     """Re-enqueue an RQ job by id.
 
@@ -152,12 +155,31 @@ async def retry_task_action(
         )
 
     try:
-        new_job = queue.enqueue_call(
-            func=task_name,
-            args=tuple(override_args),
-            kwargs=dict(override_kwargs),
-        )
-    except Exception as exc:  # noqa: BLE001
+        if eta is not None:
+            # B18: a validated (in-bounds) eta MUST actually schedule the
+            # job. The pre-fix code validated eta then called enqueue_call
+            # (immediate), silently DROPPING the schedule. Use RQ's native
+            # scheduled path with the SAME explicit args=/kwargs= form
+            # (pickle-safe, R7/R8) rather than the splatting enqueue_at.
+            from datetime import UTC, datetime
+
+            from rq.job import JobStatus
+
+            target = datetime.fromtimestamp(eta, tz=UTC)
+            new_job = queue.create_job(
+                task_name,
+                args=tuple(override_args),
+                kwargs=dict(override_kwargs),
+                status=JobStatus.SCHEDULED,
+            )
+            queue.schedule_job(new_job, target)
+        else:
+            new_job = queue.enqueue_call(
+                func=task_name,
+                args=tuple(override_args),
+                kwargs=dict(override_kwargs),
+            )
+    except Exception as exc:
         return CommandResult(status="failed", error=f"retry failed: {exc}")
 
     return CommandResult(
@@ -166,6 +188,7 @@ async def retry_task_action(
             "task_id": getattr(new_job, "id", ""),
             "queue": getattr(queue, "name", ""),
             "previous_task_id": task_id,
+            "scheduled_for": eta,
         },
     )
 
@@ -187,7 +210,7 @@ async def _fetch_job(rq_app: Any, task_id: str) -> Any | None:
     if callable(fetch):
         try:
             return fetch(task_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     try:
@@ -201,7 +224,7 @@ async def _fetch_job(rq_app: Any, task_id: str) -> Any | None:
 
     try:
         return Job.fetch(task_id, connection=connection)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -211,7 +234,7 @@ def _is_running(job: Any) -> bool:
     if callable(status):
         try:
             return str(status()).lower() == "started"
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
     return False
 
@@ -260,7 +283,7 @@ def _resolve_queue(rq_app: Any, job: Any) -> Any | None:
     if callable(factory):
         try:
             return factory(job)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
     try:
         from rq import Queue  # type: ignore[import-not-found]
@@ -271,7 +294,7 @@ def _resolve_queue(rq_app: Any, job: Any) -> Any | None:
         return None
     try:
         return Queue(name=getattr(job, "origin", "default"), connection=connection)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 

@@ -52,7 +52,7 @@ async def cancel_task_action(rq_app: Any, *, task_id: str) -> CommandResult:
     # Queued / deferred / scheduled - Job.cancel handles all three.
     try:
         job.cancel()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return CommandResult(status="failed", error=f"cancel failed: {exc}")
     return CommandResult(
         status="success",
@@ -61,7 +61,9 @@ async def cancel_task_action(rq_app: Any, *, task_id: str) -> CommandResult:
 
 
 def _soft_cancel_started(
-    rq_app: Any, job: Any, task_id: str,
+    rq_app: Any,
+    job: Any,
+    task_id: str,
 ) -> CommandResult:
     """Send a stop-job command to the worker that owns ``job``.
 
@@ -89,7 +91,7 @@ def _soft_cancel_started(
         )
     try:
         send_stop_job_command(connection, task_id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return CommandResult(status="failed", error=f"soft-cancel failed: {exc}")
     return CommandResult(
         status="success",
@@ -106,7 +108,7 @@ async def _fetch_job(rq_app: Any, task_id: str) -> Any | None:
     if callable(fetch):
         try:
             return fetch(task_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
     try:
         from rq.job import Job  # type: ignore[import-not-found]
@@ -117,7 +119,7 @@ async def _fetch_job(rq_app: Any, task_id: str) -> Any | None:
         return None
     try:
         return Job.fetch(task_id, connection=connection)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -126,7 +128,7 @@ def _job_status(job: Any) -> str:
     if callable(fn):
         try:
             return str(fn()).lower()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return ""
     return str(getattr(job, "status", "")).lower()
 

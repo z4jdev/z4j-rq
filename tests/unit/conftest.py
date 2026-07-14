@@ -48,6 +48,7 @@ class FakeQueue:
     name: str = "default"
     jobs: list[FakeJob] = field(default_factory=list)
     enqueue_calls: list[dict[str, Any]] = field(default_factory=list)
+    scheduled_calls: list[dict[str, Any]] = field(default_factory=list)
     purged: bool = False
 
     @property
@@ -84,6 +85,32 @@ class FakeQueue:
         )
         self.jobs.append(new_job)
         return new_job
+
+    def create_job(
+        self,
+        func: str,
+        *,
+        args: Iterable[Any] = (),
+        kwargs: dict[str, Any] | None = None,
+        status: Any = "scheduled",
+        **_extra: Any,
+    ) -> FakeJob:
+        # Mirrors rq.Queue.create_job: builds a job WITHOUT enqueuing it.
+        return FakeJob(
+            id=f"sched-{len(self.scheduled_calls) + 1}",
+            func_name=func,
+            origin=self.name,
+            args=tuple(args),
+            kwargs=dict(kwargs or {}),
+            status=str(getattr(status, "value", status)),
+        )
+
+    def schedule_job(self, job: FakeJob, at: Any, **_extra: Any) -> FakeJob:
+        # Mirrors rq.Queue.schedule_job: records the scheduled time.
+        self.scheduled_calls.append(
+            {"func": job.func_name, "args": job.args, "kwargs": job.kwargs, "at": at},
+        )
+        return job
 
 
 class FakeConnection:
@@ -139,8 +166,12 @@ def rq_app() -> FakeRqApp:
 
 @pytest.fixture
 def queued_job(rq_app: FakeRqApp) -> FakeJob:
-    job = FakeJob(id="job-1", func_name="myapp.tasks.send_email",
-                  args=("u-1",), kwargs={"email": "x@example.com"})
+    job = FakeJob(
+        id="job-1",
+        func_name="myapp.tasks.send_email",
+        args=("u-1",),
+        kwargs={"email": "x@example.com"},
+    )
     rq_app.register(job)
     return job
 
@@ -148,7 +179,8 @@ def queued_job(rq_app: FakeRqApp) -> FakeJob:
 @pytest.fixture
 def started_job(rq_app: FakeRqApp) -> FakeJob:
     job = FakeJob(
-        id="job-running", status="started",
+        id="job-running",
+        status="started",
         started_at=datetime.now(UTC),
     )
     rq_app.register(job)
@@ -158,7 +190,8 @@ def started_job(rq_app: FakeRqApp) -> FakeJob:
 @pytest.fixture
 def finished_job(rq_app: FakeRqApp) -> FakeJob:
     job = FakeJob(
-        id="job-done", status="finished",
+        id="job-done",
+        status="finished",
         ended_at=datetime.now(UTC),
     )
     rq_app.register(job)

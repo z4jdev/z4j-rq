@@ -19,11 +19,9 @@ import json
 from pathlib import Path
 
 import pytest
-
 from z4j_bare.buffer import BufferStore
 from z4j_bare.dispatcher import CommandDispatcher
 from z4j_core.transport.frames import CommandFrame, CommandPayload
-
 from z4j_rq.engine import RqEngineAdapter
 
 from tests.unit.test_submit_task import _patch_enqueue
@@ -38,7 +36,8 @@ def buf(tmp_path: Path) -> BufferStore:
 
 @pytest.mark.asyncio
 async def test_schedule_fire_end_to_end_through_dispatcher(
-    rq_app, buf: BufferStore,
+    rq_app,
+    buf: BufferStore,
 ) -> None:
     """A schedule.fire CommandFrame for the RQ engine must:
     1. Survive the bare dispatcher's _dispatch_schedule_fire route

@@ -54,13 +54,13 @@ _MAX_ABSOLUTE = 10_000
 _YIELD_EVERY = 100
 
 
-async def bulk_retry_action(
+async def bulk_retry_action(  # noqa: PLR0912  mode + override validation
     rq_app: Any,
     *,
-    filter: dict[str, Any] | None = None,
-    max: int = 1000,
+    filter: dict[str, Any] | None = None,  # noqa: A002  public bulk_retry signature
+    max: int = 1000,  # noqa: A002  public bulk_retry signature
     task_ids: list[str] | None = None,
-    task_priorities: dict[str, object] | None = None,  # noqa: ARG001  (RQ has none)
+    task_priorities: dict[str, object] | None = None,
 ) -> CommandResult:
     """Re-enqueue up to ``max`` jobs; returns a summary dict.
 
@@ -74,7 +74,7 @@ async def bulk_retry_action(
     the brain must look up the discovered ids and supply overrides
     before invoking the action again.
     """
-    filter = filter or {}
+    filter = filter or {}  # noqa: A001  public bulk_retry signature
     effective_max = min(max, _MAX_ABSOLUTE)
     capped = max > _MAX_ABSOLUTE
 
@@ -109,12 +109,8 @@ async def bulk_retry_action(
     if not isinstance(task_names_raw, dict):
         task_names_raw = {}
 
-    missing_overrides = [
-        jid for jid in ids if not _has_safe_override(overrides_raw.get(jid))
-    ]
-    missing_task_names = [
-        jid for jid in ids if not _has_safe_task_name(task_names_raw.get(jid))
-    ]
+    missing_overrides = [jid for jid in ids if not _has_safe_override(overrides_raw.get(jid))]
+    missing_task_names = [jid for jid in ids if not _has_safe_task_name(task_names_raw.get(jid))]
     if missing_overrides or missing_task_names:
         return CommandResult(
             status="failed",
@@ -214,7 +210,7 @@ def _collect_failed_ids(rq_app: Any, *, limit: int) -> list[str]:
         if callable(stub):
             try:
                 return list(stub(limit=limit))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return []
         return []
 
@@ -228,7 +224,7 @@ def _collect_failed_ids(rq_app: Any, *, limit: int) -> list[str]:
             # RQ's ``get_job_ids(start, end)`` is 0-indexed INCLUSIVE.
             chunk = registry.get_job_ids(0, limit - len(out) - 1)
             out.extend(str(jid) for jid in chunk)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S112  best-effort per-queue failed-id scan
             continue
     return out
 
@@ -238,7 +234,7 @@ def _iter_queues(rq_app: Any) -> list[Any]:
     if candidate is not None:
         try:
             return list(candidate)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S110  best-effort queues coercion
             pass
     try:
         from rq import Queue  # type: ignore[import-not-found]
@@ -251,7 +247,7 @@ def _iter_queues(rq_app: Any) -> list[Any]:
         return []
     try:
         return list(Queue.all(connection=connection))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
 

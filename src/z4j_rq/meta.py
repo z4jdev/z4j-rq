@@ -17,10 +17,10 @@ Example::
     from rq.decorators import job
     from z4j_rq import z4j_meta
 
+
     @job("emails", connection=redis_conn)
     @z4j_meta(redact_kwargs=["email"], tags=["billing"], deadline_ms=5000)
-    def send_invoice(user_id, email, amount):
-        ...
+    def send_invoice(user_id, email, amount): ...
 
 The implementation is intentionally identical to the Celery version
 (:mod:`z4j_celery.meta`) so users moving between engines find the

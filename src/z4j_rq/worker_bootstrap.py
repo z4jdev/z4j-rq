@@ -13,6 +13,7 @@ line. They run::
 OR, in their ``settings.py`` / ``rq_settings.py``::
 
     from z4j_rq import register_worker_bootstrap
+
     register_worker_bootstrap()
 
 Both paths construct an :class:`RqEngineAdapter` against the
@@ -46,13 +47,9 @@ def register_worker_bootstrap() -> None:
         logger.info("z4j rq: Z4J_DISABLED set - skipping bootstrap")
         return
 
-    if not all(
-        os.environ.get(k)
-        for k in ("Z4J_BRAIN_URL", "Z4J_TOKEN", "Z4J_PROJECT_ID")
-    ):
+    if not all(os.environ.get(k) for k in ("Z4J_BRAIN_URL", "Z4J_TOKEN", "Z4J_PROJECT_ID")):
         logger.info(
-            "z4j rq: bootstrap skipped - Z4J_BRAIN_URL / Z4J_TOKEN / "
-            "Z4J_PROJECT_ID not all set",
+            "z4j rq: bootstrap skipped - Z4J_BRAIN_URL / Z4J_TOKEN / Z4J_PROJECT_ID not all set",
         )
         return
 
@@ -70,13 +67,16 @@ def register_worker_bootstrap() -> None:
     # env var must not silently disable the ``wss://`` requirement).
     # The sandbox opts in explicitly when the env var is truthy.
     dev_mode = os.environ.get("Z4J_DEV_MODE", "").lower() in (
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     )
 
     adapter = RqEngineAdapter(rq_app=rq_app)
     try:
         install_agent(engines=[adapter], autostart=True, dev_mode=dev_mode)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception(
             "z4j rq: install_agent failed - agent NOT running. The "
             "RQ worker will continue normally.",
@@ -103,11 +103,12 @@ def _build_rq_app(redis_url: str) -> Any | None:
     try:
         connection = redis.Redis.from_url(redis_url)
         connection.ping()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "z4j rq: cannot connect to Redis at %s: %s - bootstrap "
             "aborted (worker continues without z4j)",
-            redis_url, str(exc)[:200],
+            redis_url,
+            str(exc)[:200],
         )
         return None
 
@@ -121,21 +122,21 @@ def _build_rq_app(redis_url: str) -> Any | None:
         def queues(self) -> list[Any]:
             try:
                 return list(Queue.all(connection=self.connection))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return []
 
         def queue_for(self, job: Any) -> Any:
-            return Queue(name=getattr(job, "origin", "default"),
-                         connection=self.connection)
+            return Queue(name=getattr(job, "origin", "default"), connection=self.connection)
 
         def queue_for_name(self, name: str) -> Any:
             return Queue(name=name, connection=self.connection)
 
         def fetch_job(self, task_id: str) -> Any | None:
             from rq.job import Job  # type: ignore[import-not-found]
+
             try:
                 return Job.fetch(task_id, connection=self.connection)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return None
 
     return _RqApp(connection)

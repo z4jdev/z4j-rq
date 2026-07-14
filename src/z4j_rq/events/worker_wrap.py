@@ -102,14 +102,13 @@ class RqWorkerHook:
         environment) we silently skip - the engine adapter handles
         the empty-capture case gracefully.
         """
-        global _ORIGINAL_EXECUTE_JOB
+        global _ORIGINAL_EXECUTE_JOB  # noqa: PLW0603  module-level singleton lazy-init
         if self._installed:
             return
         target_cls = _resolve_execute_job_owner()
         if target_cls is None:
             logger.info(
-                "z4j rq: rq.worker.BaseWorker / rq.Worker not importable "
-                "- skipping worker patch",
+                "z4j rq: rq.worker.BaseWorker / rq.Worker not importable - skipping worker patch",
             )
             return
 
@@ -145,7 +144,7 @@ class RqWorkerHook:
             try:
                 if not getattr(job, "worker_name", None):
                     job.worker_name = getattr(self_w, "name", "") or ""
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: S110  best-effort worker attribution
                 pass
             _safe_emit_started(job, sink, redaction)
 
@@ -181,7 +180,7 @@ class RqWorkerHook:
 
     def uninstall(self) -> None:
         """Restore the patched class's ``execute_job``."""
-        global _ORIGINAL_EXECUTE_JOB
+        global _ORIGINAL_EXECUTE_JOB  # noqa: PLW0603  module-level singleton lazy-init
         if not self._installed:
             return
         target_cls = getattr(self, "_patched_cls", None)
@@ -238,7 +237,7 @@ def _read_job_outcome(job: Any) -> EventKind | None:
                 status = get_status()
         else:
             status = getattr(job, "_status", None)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return EventKind.TASK_FAILED
     if status is None:
         return None
@@ -284,7 +283,7 @@ def _safe_emit(
     try:
         event = build_event(kind=kind, job=job, redaction=redaction)
         sink(event)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception(
             "z4j rq: worker-wrap event emit raised - dropping event "
             "(this is a bug in z4j, NOT in your task code)",

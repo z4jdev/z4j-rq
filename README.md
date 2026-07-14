@@ -1,8 +1,8 @@
 # z4j-rq
 
-[![PyPI version](https://img.shields.io/pypi/v/z4j-rq.svg?v=1.6.7)](https://pypi.org/project/z4j-rq/)
-[![Python](https://img.shields.io/pypi/pyversions/z4j-rq.svg?v=1.6.7)](https://pypi.org/project/z4j-rq/)
-[![License](https://img.shields.io/pypi/l/z4j-rq.svg?v=1.6.7)](https://github.com/z4jdev/z4j-rq/blob/main/LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/z4j-rq.svg?v=1.7.0)](https://pypi.org/project/z4j-rq/)
+[![Python](https://img.shields.io/pypi/pyversions/z4j-rq.svg?v=1.7.0)](https://pypi.org/project/z4j-rq/)
+[![License](https://img.shields.io/pypi/l/z4j-rq.svg?v=1.7.0)](https://github.com/z4jdev/z4j-rq/blob/main/LICENSE)
 
 The RQ engine adapter for [z4j](https://z4j.com).
 
@@ -13,7 +13,7 @@ z4j-rqscheduler to manage periodic schedules.
 ## Compatibility
 
 - RQ 1.10+ and <3 (capped below the RQ 3.0 breaking-major rewrite)
-- Python 3.10+
+- Python 3.11+
 
 Full per-adapter matrix at <https://z4j.dev/reference/compatibility/>.
 
@@ -21,7 +21,7 @@ Full per-adapter matrix at <https://z4j.dev/reference/compatibility/>.
 
 | Capability | Notes |
 |---|---|
-| Job lifecycle events | enqueued, started, finished, failed, deferred, scheduled |
+| Job lifecycle events | started, succeeded, failed, revoked (canceled) |
 | Job discovery | runtime registry of queue names + worker introspection |
 | Submit / retry / cancel | direct against the RQ queue |
 | Bulk retry | filter-driven; re-enqueues matching jobs from the failed registry |

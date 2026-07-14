@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-
 from z4j_rq.actions.bulk_retry import bulk_retry_action
 from z4j_rq.actions.dlq import requeue_dead_letter_action
-
 
 # ---------------------------------------------------------------------------
 # bulk_retry
@@ -33,7 +30,7 @@ def _all_task_names(*task_ids: str, name: str = "myapp.tasks.work") -> dict[str,
     Tests that aren't exercising the missing-task_name path use this
     helper to pass the safety gate cleanly.
     """
-    return {tid: name for tid in task_ids}
+    return dict.fromkeys(task_ids, name)
 
 
 class TestBulkRetryExplicitIds:
@@ -42,8 +39,7 @@ class TestBulkRetryExplicitIds:
         # Queue a second job so we have two ids to test.
         from tests.unit.conftest import FakeJob  # type: ignore[import-not-found]
 
-        j2 = FakeJob(id="job-2", func_name="myapp.other",
-                     args=(), kwargs={})
+        j2 = FakeJob(id="job-2", func_name="myapp.other", args=(), kwargs={})
         rq_app.register(j2)
 
         result = await bulk_retry_action(
@@ -112,13 +108,14 @@ class TestBulkRetryExplicitIds:
 
     @pytest.mark.asyncio
     async def test_missing_overrides_refuses_whole_batch_r7_h2(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """R7 H-2 regression: any id missing an override fails the batch."""
         from tests.unit.conftest import FakeJob  # type: ignore[import-not-found]
 
-        j2 = FakeJob(id="job-2", func_name="myapp.other",
-                     args=(), kwargs={})
+        j2 = FakeJob(id="job-2", func_name="myapp.other", args=(), kwargs={})
         rq_app.register(j2)
 
         result = await bulk_retry_action(
@@ -140,13 +137,14 @@ class TestBulkRetryExplicitIds:
 
     @pytest.mark.asyncio
     async def test_missing_task_names_refuses_whole_batch_r8_h1(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """R8 H-1 regression: any id missing a task_name fails the batch."""
         from tests.unit.conftest import FakeJob  # type: ignore[import-not-found]
 
-        j2 = FakeJob(id="job-2", func_name="myapp.other",
-                     args=(), kwargs={})
+        j2 = FakeJob(id="job-2", func_name="myapp.other", args=(), kwargs={})
         rq_app.register(j2)
 
         result = await bulk_retry_action(
@@ -168,13 +166,14 @@ class TestBulkRetryExplicitIds:
 
     @pytest.mark.asyncio
     async def test_bulk_retry_passes_task_name_per_job_r8_h1(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """R8 H-1 regression: each job's retry enqueues with its own task_name."""
         from tests.unit.conftest import FakeJob  # type: ignore[import-not-found]
 
-        j2 = FakeJob(id="job-2", func_name="myapp.other",
-                     args=(), kwargs={})
+        j2 = FakeJob(id="job-2", func_name="myapp.other", args=(), kwargs={})
         rq_app.register(j2)
 
         result = await bulk_retry_action(
@@ -228,7 +227,9 @@ class TestBulkRetryEmptyInput:
 class TestDlqRequeue:
     @pytest.mark.asyncio
     async def test_falls_back_to_generic_retry_when_registry_unavailable(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """In the unit-test env rq.registry isn't importable, so the
         action falls through to the generic retry path. The result
@@ -251,14 +252,17 @@ class TestDlqRequeue:
     @pytest.mark.asyncio
     async def test_missing_job_id_returns_success_noop(self, rq_app):
         result = await requeue_dead_letter_action(
-            rq_app, task_id="ghost-id",
+            rq_app,
+            task_id="ghost-id",
         )
         # Fallback path treats missing ids as idempotent no-op success.
         assert result.status == "success"
 
     @pytest.mark.asyncio
     async def test_fallback_refuses_without_overrides_r7_h2(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """R7 H-2 regression: the dlq fallback fails closed too."""
         result = await requeue_dead_letter_action(
@@ -275,7 +279,9 @@ class TestDlqRequeue:
 
     @pytest.mark.asyncio
     async def test_fallback_refuses_without_task_name_r8_h1(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """R8 H-1 regression: the dlq fallback fails closed without task_name."""
         result = await requeue_dead_letter_action(
@@ -297,11 +303,13 @@ class TestDlqRequeue:
 class TestCapabilitiesPromoted:
     def test_bulk_retry_now_in_capabilities(self):
         from z4j_rq.capabilities import DEFAULT_CAPABILITIES
+
         assert "bulk_retry" in DEFAULT_CAPABILITIES
         assert "requeue_dead_letter" in DEFAULT_CAPABILITIES
 
     def test_engine_constraints_still_absent(self):
         from z4j_rq.capabilities import DEFAULT_CAPABILITIES
+
         for absent in (
             "restart_worker",
             "rate_limit",

@@ -81,7 +81,7 @@ class _PickleFieldAccessTripwire:
     See R7 H-2 (args/kwargs closed) and R8 H-1 (func_name closure).
     """
 
-    __slots__ = ("_wrapped", "_forbidden")
+    __slots__ = ("_forbidden", "_wrapped")
 
     def __init__(
         self,
@@ -150,6 +150,7 @@ def make_strict_tripwire(job: Any) -> Any:
     safe reads (``id``, ``origin``, ``get_status``) keep working.
     """
     return _PickleFieldAccessTripwire(job, forbidden=_PICKLE_FIELDS_FULL)
+
 
 # Maximum length we ever forward for ``job.description`` and the
 # exception summary. RQ has no limit - a pathological task could
@@ -254,7 +255,7 @@ def _current_worker_name() -> str:
         return ""
     try:
         cur = get_current_job()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
     if cur is None:
         return ""
@@ -273,7 +274,7 @@ def _safe_str(value: Any) -> str:
         return ""
     try:
         return str(value)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "<unstringifiable>"
 
 
@@ -298,7 +299,7 @@ def _resolve_func_obj(job: Any) -> Any | None:
     """
     try:
         return job.func
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 

@@ -15,14 +15,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-
 from z4j_core.models import EventKind
 from z4j_core.redaction.engine import RedactionEngine
-
 from z4j_rq.events import callbacks as cb_mod
 from z4j_rq.events.mapper import build_event
 from z4j_rq.events.worker_wrap import RqWorkerHook
-
 
 # ---------------------------------------------------------------------------
 # T1 - mapper never forwards raw job.args / job.kwargs (no-pickle rule)
@@ -119,6 +116,7 @@ class TestCaptureCallbacksAreBoundary:
 
     def test_callback_with_no_sink_is_noop(self, queued_job):
         from z4j_rq.events import callbacks as cb
+
         cb.uninstall()  # ensure clean slate
         # Must not raise even though no sink is installed.
         cb.capture_success(queued_job)
@@ -168,14 +166,18 @@ class TestPurgeTokenIsAuthoritative:
     @pytest.mark.asyncio
     async def test_empty_string_token_rejected(self, rq_app, queued_job):
         from z4j_rq.actions.purge import purge_queue_action
+
         result = await purge_queue_action(
-            rq_app, queue_name=queued_job.origin, confirm_token="",
+            rq_app,
+            queue_name=queued_job.origin,
+            confirm_token="",
         )
         assert result.status == "failed"
 
     @pytest.mark.asyncio
     async def test_garbage_token_rejected(self, rq_app, queued_job):
         from z4j_rq.actions.purge import purge_queue_action
+
         result = await purge_queue_action(
             rq_app,
             queue_name=queued_job.origin,
@@ -195,19 +197,25 @@ class TestRetryEtaBounds:
     @pytest.mark.asyncio
     async def test_retry_eta_far_past_refused(self, rq_app, queued_job):
         from z4j_rq.actions.retry import retry_task_action
+
         far_past = datetime(2000, 1, 1, tzinfo=UTC).timestamp()
         result = await retry_task_action(
-            rq_app, task_id=queued_job.id, eta=far_past,
+            rq_app,
+            task_id=queued_job.id,
+            eta=far_past,
         )
         assert result.status == "failed"
 
     @pytest.mark.asyncio
     async def test_retry_eta_far_future_refused(self, rq_app, queued_job):
         from z4j_rq.actions.retry import retry_task_action
+
         far_future = datetime(2030, 1, 1, tzinfo=UTC).timestamp()
         # 2030 is more than 365 days from "now" in 2026 tests
         result = await retry_task_action(
-            rq_app, task_id=queued_job.id, eta=far_future,
+            rq_app,
+            task_id=queued_job.id,
+            eta=far_future,
         )
         assert result.status == "failed"
 
@@ -227,6 +235,7 @@ class TestCapabilitiesDoNotLie:
 
     def test_every_advertised_capability_has_method(self, rq_app):
         from z4j_rq.engine import RqEngineAdapter
+
         adapter = RqEngineAdapter(rq_app=rq_app)
         # Map capability name -> method name on the adapter.
         method_for = {
@@ -260,6 +269,7 @@ class TestEngineAdapterChurn:
 
     def test_repeated_connect_disconnect_is_safe(self, rq_app):
         from z4j_rq.engine import RqEngineAdapter
+
         adapter = RqEngineAdapter(rq_app=rq_app)
         for _ in range(5):
             adapter.connect_signals()

@@ -26,6 +26,7 @@ brain's discovery merger handles dedupe by ``name``.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -83,7 +84,7 @@ def _iter_queues(rq_app: Any) -> list[Any]:
     if candidate is not None:
         try:
             return list(candidate)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S110  best-effort queues coercion
             pass
     try:
         from rq import Queue  # type: ignore[import-not-found]
@@ -96,7 +97,7 @@ def _iter_queues(rq_app: Any) -> list[Any]:
         return []
     try:
         return list(Queue.all(connection=connection))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
 
@@ -107,7 +108,7 @@ def _iter_queue_jobs(queue: Any) -> list[Any]:
         return []
     try:
         return list(fn(0, _MAX_JOBS_PER_REGISTRY - 1))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
 
@@ -124,10 +125,8 @@ def _iter_registries(rq_app: Any) -> list[Any]:
     out: list[Any] = []
     for queue in _iter_queues(rq_app):
         for cls in (StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry):
-            try:
+            with contextlib.suppress(Exception):
                 out.append(cls(queue=queue))
-            except Exception:  # noqa: BLE001
-                pass
     return out
 
 
@@ -138,7 +137,7 @@ def _iter_registry_jobs(registry: Any) -> list[Any]:
         return []
     try:
         ids = list(fetch_ids(0, _MAX_JOBS_PER_REGISTRY - 1))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
     try:
         from rq.job import Job  # type: ignore[import-not-found]
@@ -151,7 +150,7 @@ def _iter_registry_jobs(registry: Any) -> list[Any]:
     for job_id in ids:
         try:
             out.append(Job.fetch(job_id, connection=connection))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S112  best-effort job fetch
             continue
     return out
 
@@ -175,7 +174,7 @@ def _safe_str(value: Any) -> str:
         return ""
     try:
         return str(value)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 

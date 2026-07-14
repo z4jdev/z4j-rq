@@ -89,18 +89,18 @@ def _requeue_via_registry(rq_app: Any, task_id: str) -> CommandResult | None:
     for queue in queues:
         try:
             registry = FailedJobRegistry(queue=queue)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S112  best-effort registry probe
             continue
         try:
             ids = registry.get_job_ids()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S112  best-effort registry ids
             continue
         if task_id not in ids:
             continue
         # Found - requeue and report.
         try:
             registry.requeue(task_id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return CommandResult(
                 status="failed",
                 error=f"FailedJobRegistry.requeue failed: {exc}",
@@ -123,7 +123,7 @@ def _iter_queues(rq_app: Any) -> list[Any]:
     if candidate is not None:
         try:
             return list(candidate)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S110  best-effort queues coercion
             pass
     try:
         from rq import Queue  # type: ignore[import-not-found]
@@ -136,7 +136,7 @@ def _iter_queues(rq_app: Any) -> list[Any]:
         return []
     try:
         return list(Queue.all(connection=connection))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 
 import pytest
-
 from z4j_rq.actions.cancel import cancel_task_action
 from z4j_rq.actions.purge import purge_queue_action
 from z4j_rq.actions.retry import retry_task_action
@@ -89,8 +88,34 @@ class TestRetry:
         assert "future" in result.error.lower()
 
     @pytest.mark.asyncio
+    async def test_retry_valid_eta_schedules_not_enqueues(self, rq_app, queued_job):
+        # B18: an in-bounds eta must SCHEDULE the retry for that time, not
+        # enqueue it immediately and silently drop the schedule.
+        target = time.time() + 1800  # 30 minutes out
+        result = await retry_task_action(
+            rq_app,
+            task_id=queued_job.id,
+            task_name="myapp.tasks.send_email",
+            override_args=("u-9",),
+            override_kwargs={"email": "z@example.com"},
+            eta=target,
+        )
+        assert result.status == "success"
+        assert result.result["scheduled_for"] == target
+        queue = rq_app.queue_for_name(queued_job.origin)
+        # Scheduled, NOT immediately enqueued.
+        assert queue.enqueue_calls == []
+        assert len(queue.scheduled_calls) == 1
+        sched = queue.scheduled_calls[0]
+        assert sched["func"] == "myapp.tasks.send_email"
+        assert sched["args"] == ("u-9",)
+        assert sched["kwargs"] == {"email": "z@example.com"}
+
+    @pytest.mark.asyncio
     async def test_retry_refuses_without_brain_supplied_args_r7_h2(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """R7 H-2 regression: omitting overrides must fail closed.
 
@@ -113,7 +138,9 @@ class TestRetry:
 
     @pytest.mark.asyncio
     async def test_retry_accepts_brain_supplied_args_r7_h2(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """R7 H-2 regression: the override path is the only safe path."""
         result = await retry_task_action(
@@ -143,7 +170,9 @@ class TestRetry:
 
     @pytest.mark.asyncio
     async def test_retry_refuses_without_brain_supplied_task_name_r8_h1(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """R8 H-1 regression: omitting task_name must fail closed.
 
@@ -180,7 +209,9 @@ class TestRetry:
 
     @pytest.mark.asyncio
     async def test_retry_never_reads_pickle_fields_r8_h1(
-        self, rq_app, queued_job,
+        self,
+        rq_app,
+        queued_job,
     ):
         """R8 H-1 regression: retry must never read any of the four
         pickle-load-trigger fields on the fetched Job.
@@ -230,7 +261,9 @@ class TestPurge:
     @pytest.mark.asyncio
     async def test_purge_with_force_succeeds_without_token(self, rq_app, queued_job):
         result = await purge_queue_action(
-            rq_app, queue_name=queued_job.origin, force=True,
+            rq_app,
+            queue_name=queued_job.origin,
+            force=True,
         )
         assert result.status == "success"
         assert result.result["queue"] == queued_job.origin
@@ -240,17 +273,24 @@ class TestPurge:
     @pytest.mark.asyncio
     async def test_purge_without_token_refused(self, rq_app, queued_job):
         result = await purge_queue_action(
-            rq_app, queue_name=queued_job.origin,
+            rq_app,
+            queue_name=queued_job.origin,
         )
         assert result.status == "failed"
         assert "confirm_token" in result.error
 
     @pytest.mark.asyncio
-    async def test_purge_with_correct_token_succeeds(self, rq_app, queued_job):
-        from z4j_rq.actions.purge import _derive_token
+    async def test_purge_with_correct_token_succeeds(self, rq_app, queued_job, monkeypatch):
+        from z4j_core.purge_token import legacy_purge_confirm_token
 
         queue = rq_app.queue_for_name(queued_job.origin)
-        token = _derive_token(queue.name, queue.count)
+        # No Z4J_HMAC_SECRET in this env -> only the legacy unkeyed token is
+        # available, which is OFF by default now; opt into the grace window.
+        monkeypatch.setenv("Z4J_ACCEPT_LEGACY_PURGE_TOKEN", "1")
+        token = legacy_purge_confirm_token(
+            queue_name=queue.name,
+            queue_depth=queue.count,
+        )
         result = await purge_queue_action(
             rq_app,
             queue_name=queue.name,
@@ -260,11 +300,14 @@ class TestPurge:
 
     @pytest.mark.asyncio
     async def test_purge_with_stale_token_refused(self, rq_app, queued_job):
-        from z4j_rq.actions.purge import _derive_token
+        from z4j_core.purge_token import legacy_purge_confirm_token
 
         queue = rq_app.queue_for_name(queued_job.origin)
         # Token derived for a different depth - should fail
-        token = _derive_token(queue.name, queue.count + 99)
+        token = legacy_purge_confirm_token(
+            queue_name=queue.name,
+            queue_depth=queue.count + 99,
+        )
         result = await purge_queue_action(
             rq_app,
             queue_name=queue.name,
@@ -275,13 +318,15 @@ class TestPurge:
 
     @pytest.mark.asyncio
     async def test_purge_above_threshold_refused_without_force(
-        self, rq_app, monkeypatch,
+        self,
+        rq_app,
+        monkeypatch,
     ):
         # Force a ridiculously low threshold and queue 5 jobs.
         monkeypatch.setenv("Z4J_PURGE_THRESHOLD", "2")
         from dataclasses import dataclass
 
-        from z4j_rq.actions.purge import _derive_token
+        from z4j_core.purge_token import legacy_purge_confirm_token
 
         @dataclass
         class _Job:
@@ -292,9 +337,13 @@ class TestPurge:
         for i in range(5):
             queue.jobs.append(_Job(id=f"j{i}"))
 
-        token = _derive_token("hot", queue.count)
+        # Threshold refusal fires before the token check; token shape is
+        # irrelevant here but supplied for realism.
+        token = legacy_purge_confirm_token(queue_name="hot", queue_depth=queue.count)
         result = await purge_queue_action(
-            rq_app, queue_name="hot", confirm_token=token,
+            rq_app,
+            queue_name="hot",
+            confirm_token=token,
         )
         assert result.status == "failed"
         assert "Z4J_PURGE_THRESHOLD" in result.error

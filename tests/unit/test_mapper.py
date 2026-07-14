@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 
 from z4j_core.models import EventKind
 from z4j_core.redaction.engine import RedactionEngine
-
 from z4j_rq.events.mapper import build_event
 from z4j_rq.meta import z4j_meta
 
@@ -65,8 +64,7 @@ class TestBuildEvent:
 
     def test_meta_tags_attached_to_payload(self, queued_job):
         @z4j_meta(tags=["billing", "critical"], priority="high")
-        def some_task() -> None:
-            ...
+        def some_task() -> None: ...
 
         queued_job.func = some_task
         ev = build_event(
@@ -81,6 +79,7 @@ class TestBuildEvent:
         class _Bad:
             def __str__(self) -> str:
                 raise RuntimeError("nope")
+
         queued_job.description = _Bad()  # type: ignore[assignment]
         ev = build_event(
             kind=EventKind.TASK_STARTED,

@@ -24,6 +24,7 @@ Constructor arg ``rq_app`` is duck-typed:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
@@ -147,8 +148,7 @@ class RqEngineAdapter:
                 try:
                     dropped = self._event_queue.get_nowait()
                     logger.warning(
-                        "z4j rq: event queue full, dropped event "
-                        "kind=%s",
+                        "z4j rq: event queue full, dropped event kind=%s",
                         getattr(dropped, "kind", "?"),
                     )
                 except asyncio.QueueEmpty:
@@ -164,7 +164,7 @@ class RqEngineAdapter:
 
     async def discover_tasks(
         self,
-        hints: DiscoveryHints | None = None,  # noqa: ARG002 (Phase-1.1 source)
+        hints: DiscoveryHints | None = None,
     ) -> list[TaskDefinition]:
         """Return distinct ``TaskDefinition``s observed in the rq_app."""
         return discover_runtime(self.rq_app)
@@ -256,7 +256,7 @@ class RqEngineAdapter:
             )
         try:
             job = Job.fetch(task_id, connection=connection)
-        except Exception:  # noqa: BLE001
+        except Exception:
             # RQ prunes finished jobs after a TTL; a missing Job is
             # canonical "unknown" - brain leaves its own state alone.
             return CommandResult(
@@ -269,22 +269,20 @@ class RqEngineAdapter:
                 },
             )
         raw_status = ""
-        try:
+        with contextlib.suppress(Exception):
             raw_status = str(job.get_status()).lower()
-        except Exception:  # noqa: BLE001
-            pass
         engine_state = state_map.get(raw_status, "unknown")
         finished_at: str | None = None
         try:
             if job.ended_at is not None:
                 finished_at = job.ended_at.isoformat()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S110  best-effort ended_at
             pass
         exc_info: str | None = None
         try:
             if engine_state == "failure" and job.exc_info:
                 exc_info = str(job.exc_info)[:2000]
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S110  best-effort exc_info
             pass
         return CommandResult(
             status="success",
@@ -308,7 +306,7 @@ class RqEngineAdapter:
             return None
         try:
             Job.fetch(task_id, connection=connection)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise NotFoundError(f"task {task_id!r} not found") from exc
         # The brain owns the authoritative Task state - adapter
         # returns None to indicate "task exists, brain has the data".
@@ -335,7 +333,7 @@ class RqEngineAdapter:
         try:
             connection.ping()
             health["broker_connected"] = True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             health["broker_error"] = str(exc)[:200]
             return health
 
@@ -346,11 +344,9 @@ class RqEngineAdapter:
 
         try:
             for q in Queue.all(connection=connection):
-                try:
+                with contextlib.suppress(Exception):
                     health["queue_depths"][q.name] = int(q.count)
-                except Exception:  # noqa: BLE001
-                    pass
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             health["queue_enum_error"] = str(exc)[:200]
 
         return health
@@ -370,8 +366,8 @@ class RqEngineAdapter:
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
         queue: str | None = None,
-        eta: float | None = None,  # noqa: ARG002 - RQ uses enqueue_at separately
-        priority: int | None = None,  # noqa: ARG002
+        eta: float | None = None,
+        priority: int | None = None,
     ) -> CommandResult:
         """Universal enqueue via ``Queue.enqueue(name, ...)``.
 
@@ -390,7 +386,7 @@ class RqEngineAdapter:
                 q = Queue(name=queue_name, connection=connection)
             job = q.enqueue(name, *args, **(kwargs or {}))
             new_id = getattr(job, "id", None)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return CommandResult(status="failed", error=str(exc))
         return CommandResult(
             status="success",
@@ -473,7 +469,7 @@ class RqEngineAdapter:
     # bypasses the capability gate the failure message is the
     # engine-constraint explanation.
 
-    async def rate_limit(  # noqa: ARG002
+    async def rate_limit(
         self,
         task_name: str,
         rate: str,
@@ -489,7 +485,7 @@ class RqEngineAdapter:
             ),
         )
 
-    async def restart_worker(self, worker_id: str) -> CommandResult:  # noqa: ARG002
+    async def restart_worker(self, worker_id: str) -> CommandResult:
         return CommandResult(
             status="failed",
             error=(

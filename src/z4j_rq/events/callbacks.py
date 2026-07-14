@@ -57,14 +57,14 @@ def install(*, sink: Callable[[Event], None], redaction: RedactionEngine) -> Non
     a second call replaces the previous installation, which matches
     test cleanup semantics (each test installs its own sink).
     """
-    global _SINK, _REDACTION
+    global _SINK, _REDACTION  # noqa: PLW0603  module-level singleton lazy-init
     _SINK = sink
     _REDACTION = redaction
 
 
 def uninstall() -> None:
     """Drop the installed sink + redaction engine."""
-    global _SINK, _REDACTION
+    global _SINK, _REDACTION  # noqa: PLW0603  module-level singleton lazy-init
     _SINK = None
     _REDACTION = None
 
@@ -75,7 +75,9 @@ def capture_started(job: Any, *_args: Any, **_kwargs: Any) -> None:
 
 
 def capture_success(
-    job: Any, _connection: Any = None, _result: Any = None,
+    job: Any,
+    _connection: Any = None,
+    _result: Any = None,
 ) -> None:
     """RQ ``success_callback`` shape: emit ``task.succeeded``.
 
@@ -89,8 +91,11 @@ def capture_success(
 
 
 def capture_failure(
-    job: Any, _connection: Any = None, _exc_type: Any = None,
-    _exc_value: Any = None, _traceback: Any = None,
+    job: Any,
+    _connection: Any = None,
+    _exc_type: Any = None,
+    _exc_value: Any = None,
+    _traceback: Any = None,
 ) -> None:
     """RQ ``failure_callback`` shape: emit ``task.failed``.
 
@@ -120,7 +125,7 @@ def _emit(kind: EventKind, job: Any) -> None:
     try:
         event = build_event(kind=kind, job=job, redaction=redaction)
         sink(event)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception(
             "z4j rq: capture callback raised - dropping event "
             "(this is a bug in z4j, NOT in your task code)",

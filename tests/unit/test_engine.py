@@ -6,9 +6,7 @@ import asyncio
 import inspect
 
 import pytest
-
 from z4j_core.protocols import QueueEngineAdapter
-
 from z4j_rq.capabilities import DEFAULT_CAPABILITIES
 from z4j_rq.engine import RqEngineAdapter
 
@@ -42,8 +40,7 @@ class TestRqEngineAdapterShape:
             "cancel_consumer",
         ):
             assert absent not in caps, (
-                f"{absent} must not be in RQ capabilities - see "
-                "docs/MULTI_ENGINE_PLAN.md §5"
+                f"{absent} must not be in RQ capabilities - see docs/MULTI_ENGINE_PLAN.md §5"
             )
 
 
@@ -69,19 +66,16 @@ class TestRqEngineAdapterAsyncMethods:
     def test_method_is_coroutine(self, rq_app, method_name):
         adapter = RqEngineAdapter(rq_app=rq_app)
         method = getattr(adapter, method_name)
-        assert inspect.iscoroutinefunction(method), (
-            f"{method_name} must be `async def`"
-        )
+        assert inspect.iscoroutinefunction(method), f"{method_name} must be `async def`"
 
     @pytest.mark.parametrize(
-        "method_name", ["subscribe_events", "subscribe_registry_changes"],
+        "method_name",
+        ["subscribe_events", "subscribe_registry_changes"],
     )
     def test_subscribe_methods_are_async_generators(self, rq_app, method_name):
         adapter = RqEngineAdapter(rq_app=rq_app)
         method = getattr(adapter, method_name)
-        assert inspect.isasyncgenfunction(method), (
-            f"{method_name} must be `async def ... yield`"
-        )
+        assert inspect.isasyncgenfunction(method), f"{method_name} must be `async def ... yield`"
 
 
 class TestUnsupportedActionsReportHonestly:

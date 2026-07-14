@@ -13,11 +13,9 @@ fail at the engine boundary and we'd only catch it in production.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Any
 
 import pytest
-
 from z4j_rq.engine import RqEngineAdapter
 
 
@@ -36,6 +34,7 @@ class TestSubmitTask:
         # locally so the adapter's call lands somewhere observable.
         # The real RQ Queue.enqueue takes (name, *args, **kwargs).
         from z4j_rq.engine import RqEngineAdapter as _Adapter
+
         _patch_enqueue(rq_app)
 
         adapter = _Adapter(rq_app=rq_app)
@@ -81,6 +80,7 @@ class TestSubmitTask:
         ``CommandResult(status="failed", error=...)`` instead of
         bubbling the exception out into the dispatcher loop.
         """
+
         def boom(*_a: Any, **_k: Any) -> None:
             raise RuntimeError("redis unreachable")
 
@@ -103,7 +103,7 @@ def _patch_enqueue(rq_app) -> None:
     every queue this app vends so the adapter's new call site lands on
     a recorder.
     """
-    from dataclasses import dataclass, field
+    from dataclasses import dataclass
 
     @dataclass
     class _FakeJob:
@@ -112,12 +112,15 @@ def _patch_enqueue(rq_app) -> None:
     def make_enqueue(queue):
         def _enqueue(name, *args, **kwargs):
             new_id = f"submit-{len(queue.submit_calls) + 1}"
-            queue.submit_calls.append({
-                "name": name,
-                "args": tuple(args),
-                "kwargs": dict(kwargs),
-            })
+            queue.submit_calls.append(
+                {
+                    "name": name,
+                    "args": tuple(args),
+                    "kwargs": dict(kwargs),
+                }
+            )
             return _FakeJob(id=new_id)
+
         return _enqueue
 
     original = rq_app.queue_for_name
