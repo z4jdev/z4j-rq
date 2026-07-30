@@ -83,6 +83,29 @@ def register_worker_bootstrap() -> None:
         )
 
 
+def _redis_protocol_hint(exc: BaseException) -> str:
+    """Name the cause when a modern client meets a pre-6.0 Redis server.
+
+    ``redis-py`` 6.0+ negotiates RESP3 with a ``HELLO`` command that does not
+    exist before Redis 6, so the connection fails with an opaque
+    "unknown command `HELLO`". Operators read logs, not release notes, and this
+    error gives them nothing to act on.
+
+    Deliberately NOT worked around by retrying with ``protocol=2``. ``rq``
+    itself fails identically on the same pairing (verified against a real Redis
+    5.0.14 server with redis-py 8.0.1), so a fallback here would let z4j report
+    a healthy connection while the queue the operator actually cares about is
+    dead. Failing with a usable message beats succeeding in isolation.
+    """
+    if "HELLO" not in str(exc):
+        return ""
+    return (
+        ". Your Redis server predates 6.0 but redis-py is 6.0+, which "
+        "negotiates RESP3; rq cannot talk to this server either. "
+        'Pin the client: pip install "redis<6"'
+    )
+
+
 def _build_rq_app(redis_url: str) -> Any | None:
     """Construct a small object satisfying :class:`RqEngineAdapter`'s rq_app duck-type."""
     try:
@@ -106,9 +129,10 @@ def _build_rq_app(redis_url: str) -> Any | None:
     except Exception as exc:
         logger.warning(
             "z4j rq: cannot connect to Redis at %s: %s - bootstrap "
-            "aborted (worker continues without z4j)",
+            "aborted (worker continues without z4j)%s",
             redis_url,
             str(exc)[:200],
+            _redis_protocol_hint(exc),
         )
         return None
 

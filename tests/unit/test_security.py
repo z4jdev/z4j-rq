@@ -27,7 +27,7 @@ from z4j_rq.events.worker_wrap import RqWorkerHook
 
 
 class TestMapperDoesNotForwardArgsOrKwargs:
-    """CLAUDE.md §2.3: no pickled bytes leave the agent unredacted.
+    """No pickled bytes leave the agent unredacted.
 
     Even if the user puts plaintext secrets into ``kwargs`` (a common
     anti-pattern with RQ because it pickles by default), the agent
@@ -91,7 +91,7 @@ class TestExceptionPayloadBounded:
 class TestCaptureCallbacksAreBoundary:
     """A bug in z4j must not crash the user's RQ worker.
 
-    CLAUDE.md §2.2: every host-callback boundary is wrapped. The
+    Every host-callback boundary is wrapped. The
     callbacks intentionally swallow EVERY exception (including ones
     raised inside ``build_event`` itself).
     """

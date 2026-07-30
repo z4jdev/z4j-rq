@@ -75,6 +75,9 @@ class RqEngineAdapter:
 
     name: str = RQ_ENGINE_NAME
     protocol_version: str = PROTOCOL_VERSION
+    # Boundary A (1.8.0): adapter-owned proof. RQ retry resolves the owned
+    # job by id/name and fails closed; it does not replay redacted arguments.
+    safe_retry_by_reference: bool = True
 
     def __init__(
         self,
@@ -403,7 +406,7 @@ class RqEngineAdapter:
         eta: float | None = None,
         priority: object = None,
     ) -> CommandResult:
-        # R8 H-1: brain-supplied task_name replaces job.func_name
+        # Brain-supplied task_name replaces job.func_name
         # (which would lazy-load pickle from the broker). The action
         # itself fails closed if task_name is empty - the dispatcher
         # already populates it from the original task observation,

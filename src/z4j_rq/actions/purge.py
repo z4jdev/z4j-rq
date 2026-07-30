@@ -33,9 +33,12 @@ from z4j_core.purge_token import (
 )
 from z4j_core.transport.hmac import decode_agent_hmac_secret
 
+from z4j_rq._offload import OffloadTimeoutError, indeterminate_timeout_result, offload
+
 logger = logging.getLogger("z4j.adapter.rq.actions.purge")
 
 _DEFAULT_THRESHOLD = 10_000
+_OFFLOAD_TIMEOUT = 10.0
 
 
 def _resolve_agent_secret() -> bytes | None:
@@ -54,7 +57,7 @@ def _resolve_agent_secret() -> bytes | None:
         return None
 
 
-async def purge_queue_action(
+async def purge_queue_action(  # noqa: PLR0911  guard + offload timeout branches
     rq_app: Any,
     *,
     queue_name: str,
@@ -62,19 +65,47 @@ async def purge_queue_action(
     force: bool = False,
 ) -> CommandResult:
     """Empty ``queue_name`` after token + threshold checks."""
-    queue = _resolve_queue(rq_app, queue_name)
+    # Resolving the queue and reading ``Queue.count`` both hit Redis
+    # synchronously (redis-py is pure-sync); offload to a thread so a
+    # broker slowdown cannot freeze the agent's single event loop.
+    try:
+        queue, depth = await offload(
+            _resolve_and_count, rq_app, queue_name, timeout=_OFFLOAD_TIMEOUT
+        )
+    except OffloadTimeoutError:
+        # RL2: this is the DEPTH-PROBE read, which runs BEFORE queue.empty().
+        # A read is side-effect-free, so a timeout is a clean, retryable
+        # failure -- NOT the indeterminate outcome reserved for a mutation that
+        # may have half-applied.
+        return CommandResult(
+            status="failed",
+            error=(
+                f"refusing to purge {queue_name!r}: the depth probe timed out "
+                f"after {_OFFLOAD_TIMEOUT:g}s (a read; no messages were purged, "
+                "safe to retry when Redis is responsive)."
+            ),
+        )
+    except Exception as exc:
+        return CommandResult(status="failed", error=f"purge failed: {exc}")
+
     if queue is None:
         return CommandResult(
             status="failed",
             error=f"queue {queue_name!r} not resolvable",
         )
 
-    try:
-        depth = int(getattr(queue, "count", 0) or 0)
-    except Exception:
-        depth = 0
-
     if not force:
+        if depth is None:
+            # 1.7.1 (H9): unmeasurable depth is NOT an empty queue -- refuse
+            # rather than let a failed probe relax the threshold/token gate.
+            return CommandResult(
+                status="failed",
+                error=(
+                    f"refusing to purge {queue_name!r}: could not read the "
+                    "queue depth (the broker may be unreachable). Retry when "
+                    "the broker is responsive, or re-issue with force=true."
+                ),
+            )
         threshold = _threshold()
         if depth > threshold:
             return CommandResult(
@@ -109,14 +140,45 @@ async def purge_queue_action(
                 queue_name,
             )
 
+    # ``Queue.empty()`` runs a Lua script against Redis synchronously;
+    # offload it too.
     try:
-        queue.empty()
+        await offload(queue.empty, timeout=_OFFLOAD_TIMEOUT)
+    except OffloadTimeoutError:
+        return indeterminate_timeout_result(
+            "purge_queue",
+            _OFFLOAD_TIMEOUT,
+            hint="the queue may still be purged",
+        )
     except Exception as exc:
         return CommandResult(status="failed", error=f"purge failed: {exc}")
     return CommandResult(
         status="success",
         result={"queue": queue_name, "purged": depth},
     )
+
+
+def _resolve_and_count(rq_app: Any, queue_name: str) -> tuple[Any | None, int | None]:
+    """Resolve a Queue handle and read its depth in one blocking hop.
+
+    Both steps can touch Redis synchronously, so they are called together
+    off the event loop. Returns ``(None, None)`` when the queue is
+    unresolvable, and ``(queue, None)`` when the queue resolves but its
+    depth cannot be read -- distinct from a genuine ``(queue, 0)`` empty
+    queue (1.7.1 H9).
+    """
+    queue = _resolve_queue(rq_app, queue_name)
+    if queue is None:
+        return None, None
+    try:
+        depth: int | None = int(getattr(queue, "count", 0) or 0)
+    except Exception:
+        # 1.7.1 (H9): the depth probe FAILED (broker unreachable). Do NOT
+        # report 0 -- the caller would treat it as an empty queue, pass the
+        # threshold + confirm-token gates, and purge everything once the
+        # connection recovers.
+        depth = None
+    return queue, depth
 
 
 def _resolve_queue(rq_app: Any, queue_name: str) -> Any | None:

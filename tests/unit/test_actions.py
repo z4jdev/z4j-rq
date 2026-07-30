@@ -14,7 +14,7 @@ from z4j_rq.events.mapper import make_strict_tripwire
 class TestRetry:
     @pytest.mark.asyncio
     async def test_retry_queued_job_creates_new_job(self, rq_app, queued_job):
-        # R7 H-2 + R8 H-1: brain MUST supply task_name, override_args, override_kwargs.
+        # Brain MUST supply task_name, override_args, override_kwargs.
         result = await retry_task_action(
             rq_app,
             task_id=queued_job.id,
@@ -28,7 +28,7 @@ class TestRetry:
         queue = rq_app.queue_for_name(queued_job.origin)
         assert queue.enqueue_calls[-1]["args"] == ("u-1",)
         assert queue.enqueue_calls[-1]["kwargs"] == {"email": "x@example.com"}
-        # R8 H-1: enqueue must use the brain-supplied task_name, not
+        # Enqueue must use the brain-supplied task_name, not
         # job.func_name (which would lazy-pickle-load).
         assert queue.enqueue_calls[-1]["func"] == "myapp.tasks.send_email"
 
@@ -112,16 +112,18 @@ class TestRetry:
         assert sched["kwargs"] == {"email": "z@example.com"}
 
     @pytest.mark.asyncio
-    async def test_retry_refuses_without_brain_supplied_args_r7_h2(
+    async def test_retry_without_overrides_requeues_by_reference_never_pickle_r7_h2(
         self,
         rq_app,
         queued_job,
     ):
-        """R7 H-2 regression: omitting overrides must fail closed.
-
-        Reading job.args / job.kwargs in the agent process would
-        deserialize attacker-controlled pickle bytes (RCE). The
-        retry action must refuse rather than silently pickle-load.
+        """/ CX-M17: with no operator overrides, retry re-runs the
+        original failed job BY REFERENCE (FailedJobRegistry.requeue), which
+        never deserializes job.args / job.kwargs / job.func_name in the
+        agent process. It must NEVER fall back to pickle reconstruction.
+        In this fake env ``rq`` is not installed, so requeue-by-reference
+        is unavailable and the action fails closed -- but it must fail
+        closed WITHOUT ever enqueuing a reconstructed job.
         """
         result = await retry_task_action(
             rq_app,
@@ -129,10 +131,10 @@ class TestRetry:
             task_name="myapp.tasks.send_email",
         )
         assert result.status == "failed"
-        assert "override_args" in result.error
-        assert "override_kwargs" in result.error
-        assert "pickle" in result.error.lower()
-        # Nothing was enqueued.
+        # New fail-closed message: not in a FailedJobRegistry + no overrides.
+        assert "FailedJobRegistry" in result.error
+        assert "retry with different inputs" in result.error
+        # Critically: NOTHING was reconstruct-enqueued (no pickle path).
         queue = rq_app.queue_for_name(queued_job.origin)
         assert queue.enqueue_calls == []
 
@@ -142,7 +144,7 @@ class TestRetry:
         rq_app,
         queued_job,
     ):
-        """R7 H-2 regression: the override path is the only safe path."""
+        """Regression: the override path is the only safe path."""
         result = await retry_task_action(
             rq_app,
             task_id=queued_job.id,
@@ -174,7 +176,7 @@ class TestRetry:
         rq_app,
         queued_job,
     ):
-        """R8 H-1 regression: omitting task_name must fail closed.
+        """Regression: omitting task_name must fail closed.
 
         Reading job.func_name in the agent process triggers RQ's
         ``_deserialize_data`` (same pickle blob as args/kwargs). The
@@ -196,7 +198,7 @@ class TestRetry:
 
     @pytest.mark.asyncio
     async def test_retry_refuses_empty_task_name_r8_h1(self, rq_app, queued_job):
-        """R8 H-1: empty string task_name is rejected like None."""
+        """Empty string task_name is rejected like None."""
         result = await retry_task_action(
             rq_app,
             task_id=queued_job.id,
@@ -213,7 +215,7 @@ class TestRetry:
         rq_app,
         queued_job,
     ):
-        """R8 H-1 regression: retry must never read any of the four
+        """Regression: retry must never read any of the four
         pickle-load-trigger fields on the fetched Job.
 
         Wraps the registered Job in a tripwire proxy that raises

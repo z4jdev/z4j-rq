@@ -16,7 +16,7 @@ from z4j_rq.actions.dlq import requeue_dead_letter_action
 def _all_empty_overrides(*task_ids: str) -> dict[str, dict[str, Any]]:
     """Shorthand for tests: supply empty-but-explicit overrides per id.
 
-    R7 H-2: bulk_retry refuses any id that lacks an override entry.
+    bulk_retry refuses any id that lacks an override entry.
     Tests that aren't exercising the missing-override path use this
     helper to pass the safety gate cleanly.
     """
@@ -26,7 +26,7 @@ def _all_empty_overrides(*task_ids: str) -> dict[str, dict[str, Any]]:
 def _all_task_names(*task_ids: str, name: str = "myapp.tasks.work") -> dict[str, str]:
     """Shorthand for tests: supply a uniform task_name per id.
 
-    R8 H-1: bulk_retry refuses any id that lacks a task_name entry.
+    bulk_retry refuses any id that lacks a task_name entry.
     Tests that aren't exercising the missing-task_name path use this
     helper to pass the safety gate cleanly.
     """
@@ -107,12 +107,16 @@ class TestBulkRetryExplicitIds:
         assert result.result["capped"] is True
 
     @pytest.mark.asyncio
-    async def test_missing_overrides_refuses_whole_batch_r7_h2(
+    async def test_id_without_override_is_not_pickle_reconstructed_r7_h2(
         self,
         rq_app,
         queued_job,
     ):
-        """R7 H-2 regression: any id missing an override fails the batch."""
+        """/ CX-M17: an id WITHOUT an explicit override is never
+        pickle-reconstructed. It is requeued by reference instead (which is
+        unavailable in this rq-less fake, so it fails closed for that id);
+        the id WITH an override reconstructs normally. The batch is a per-id
+        summary, not an all-or-nothing refusal."""
         from tests.unit.conftest import FakeJob  # type: ignore[import-not-found]
 
         j2 = FakeJob(id="job-2", func_name="myapp.other", args=(), kwargs={})
@@ -122,26 +126,31 @@ class TestBulkRetryExplicitIds:
             rq_app,
             filter={
                 "task_ids": [queued_job.id, j2.id],
-                # Only one override - the other id must trip the gate.
+                # Only one override - the other id must NOT be reconstructed.
                 "overrides": _all_empty_overrides(queued_job.id),
                 "task_names": _all_task_names(queued_job.id, j2.id),
             },
             max=10,
         )
-        assert result.status == "failed"
-        assert "missing brain-supplied" in result.error
-        assert result.result["missing_overrides"] == [j2.id]
-        # Nothing was retried.
+        assert result.status == "success"
+        # queued_job (has override) reconstructed; j2 (no override) is not.
+        assert result.result["retried"] == 1
+        assert j2.id in result.result["errors"]
+        # Exactly ONE reconstruction enqueue (queued_job); j2 was never
+        # pickle-reconstructed.
         queue = rq_app.queue_for_name(queued_job.origin)
-        assert queue.enqueue_calls == []
+        assert len(queue.enqueue_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_missing_task_names_refuses_whole_batch_r8_h1(
+    async def test_override_without_task_name_is_not_pickle_reconstructed_r8_h1(
         self,
         rq_app,
         queued_job,
     ):
-        """R8 H-1 regression: any id missing a task_name fails the batch."""
+        """An id with an explicit override but NO brain-supplied
+        task_name must not be reconstructed (that would need job.func_name
+        from pickle). It is recorded as a per-id error; the id with both an
+        override and a task_name reconstructs."""
         from tests.unit.conftest import FakeJob  # type: ignore[import-not-found]
 
         j2 = FakeJob(id="job-2", func_name="myapp.other", args=(), kwargs={})
@@ -152,17 +161,19 @@ class TestBulkRetryExplicitIds:
             filter={
                 "task_ids": [queued_job.id, j2.id],
                 "overrides": _all_empty_overrides(queued_job.id, j2.id),
-                # Only one task_name - the other id must trip the gate.
+                # Only one task_name - j2 has an override but no task_name.
                 "task_names": _all_task_names(queued_job.id),
             },
             max=10,
         )
-        assert result.status == "failed"
-        assert "missing brain-supplied" in result.error
-        assert result.result["missing_task_names"] == [j2.id]
-        # Nothing was retried.
+        assert result.status == "success"
+        assert result.result["retried"] == 1
+        assert j2.id in result.result["errors"]
+        assert "task_name" in result.result["errors"][j2.id]
+        # Exactly ONE reconstruction enqueue (queued_job); j2 was never
+        # pickle-reconstructed.
         queue = rq_app.queue_for_name(queued_job.origin)
-        assert queue.enqueue_calls == []
+        assert len(queue.enqueue_calls) == 1
 
     @pytest.mark.asyncio
     async def test_bulk_retry_passes_task_name_per_job_r8_h1(
@@ -170,7 +181,7 @@ class TestBulkRetryExplicitIds:
         rq_app,
         queued_job,
     ):
-        """R8 H-1 regression: each job's retry enqueues with its own task_name."""
+        """Regression: each job's retry enqueues with its own task_name."""
         from tests.unit.conftest import FakeJob  # type: ignore[import-not-found]
 
         j2 = FakeJob(id="job-2", func_name="myapp.other", args=(), kwargs={})
@@ -197,18 +208,27 @@ class TestBulkRetryExplicitIds:
         assert "tasks.send_sms" in funcs
 
 
-class TestBulkRetryRegistrySweep:
+class TestBulkRetryNoRegistrySweepRH4:
     @pytest.mark.asyncio
-    async def test_uses_rq_app_stub_when_registry_unavailable(self, rq_app):
-        # The test env doesn't have the rq.registry module; the
-        # action accepts a stub via ``rq_app.failed_job_ids(limit=)``
-        # that lets us exercise the registry path.
-        rq_app.failed_job_ids = lambda *, limit: []  # type: ignore[attr-defined]
+    async def test_no_ids_is_noop_not_broker_sweep(self, rq_app):
+        # RH4: a bulk_retry with no explicit task_ids must NOT walk the broker's
+        # FailedJobRegistry (that retried EVERY failed job on the shared broker,
+        # including other projects' jobs the brain never ownership-verified). It
+        # is now a clean no-op; the brain resolves project-owned ids and supplies
+        # them explicitly. The old sweep stub must never be consulted.
+        swept = {"called": False}
+
+        def _stub(*, limit):
+            swept["called"] = True
+            return ["foreign-1", "foreign-2"]
+
+        rq_app.failed_job_ids = _stub  # type: ignore[attr-defined]
 
         result = await bulk_retry_action(rq_app, max=10)
         assert result.status == "success"
-        assert result.result["source"] == "failed_registry"
         assert result.result["retried"] == 0
+        assert result.result["source"] == "no_explicit_ids"
+        assert swept["called"] is False  # the broker was NEVER swept
 
 
 class TestBulkRetryEmptyInput:
@@ -235,7 +255,7 @@ class TestDlqRequeue:
         action falls through to the generic retry path. The result
         should mark the source as ``dlq_fallback``.
 
-        R7 H-2 + R8 H-1: the fallback runs in the agent process and
+        The fallback runs in the agent process and
         therefore requires brain-supplied task_name AND override args /
         kwargs.
         """
@@ -264,7 +284,7 @@ class TestDlqRequeue:
         rq_app,
         queued_job,
     ):
-        """R7 H-2 regression: the dlq fallback fails closed too."""
+        """Regression: the dlq fallback fails closed too."""
         result = await requeue_dead_letter_action(
             rq_app,
             task_id=queued_job.id,
@@ -273,7 +293,7 @@ class TestDlqRequeue:
         )
         # The fallback delegates to retry_task_action which refuses
         # without overrides; the failure should be visible to the
-        # operator with the same R7 H-2 language.
+        # operator with the same language.
         assert result.status == "failed"
         assert "override_args" in result.error
 
@@ -283,7 +303,7 @@ class TestDlqRequeue:
         rq_app,
         queued_job,
     ):
-        """R8 H-1 regression: the dlq fallback fails closed without task_name."""
+        """Regression: the dlq fallback fails closed without task_name."""
         result = await requeue_dead_letter_action(
             rq_app,
             task_id=queued_job.id,

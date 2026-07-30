@@ -5,7 +5,7 @@ take a brain-supplied function reference, and ``Queue.enqueue`` a
 fresh job with caller-supplied args + kwargs on the original
 queue (or a caller-overridden queue).
 
-Security (R7 H-2 + R8 H-1): we **never** read ``job.args``,
+Security: we **never** read ``job.args``,
 ``job.kwargs``, ``job.func_name``, or ``job.instance`` from the
 stored Job. RQ stores all four inside a single pickle blob (see
 ``rq.job.Job._deserialize_data``) and lazy-loads them on first
@@ -21,8 +21,8 @@ If any of the three is missing we fail closed with
 :class:`RetryUnsafeError` rather than silently triggering the
 pickle load.
 
-R7 H-2 closed args/kwargs. R8 H-1 closed func_name/instance after
-the Codex round-8 audit found ``queue.enqueue_call(func=job.func_name, ...)``
+Closed args/kwargs. closed func_name/instance after
+the audit found ``queue.enqueue_call(func=job.func_name...)``
 still triggered the lazy-pickle path even with args/kwargs gated.
 
 Edge cases handled:
@@ -39,8 +39,7 @@ Edge cases handled:
   (``create_job(status=SCHEDULED)`` + ``schedule_job``), not an
   immediate enqueue. Out-of-bounds etas (>60 s in the past, >1 y in
   the future) are refused with a clear error. RQ's built-in scheduler
-  (or a scheduler-enabled worker) picks the job up at its time.
-"""
+  (or a scheduler-enabled worker) picks the job up at its time."""
 
 from __future__ import annotations
 
@@ -50,7 +49,16 @@ from typing import Any
 
 from z4j_core.models import CommandResult
 
+from z4j_rq._offload import OffloadTimeoutError, indeterminate_timeout_result, offload
+
 logger = logging.getLogger("z4j.adapter.rq.actions.retry")
+
+#: Cap on each synchronous Redis / RQ broker call. redis-py is pure-sync,
+#: so every fetch / status / queue-resolve / enqueue below is offloaded to a
+#: thread under this timeout: a broker slowdown / failover must never freeze
+#: the agent's single event loop (heartbeat, send loop, ack watchdog, WS
+#: ping/pong) -- exactly when an operator reaches for Retry.
+_OFFLOAD_TIMEOUT = 10.0
 
 
 class RetryUnsafeError(Exception):
@@ -62,8 +70,8 @@ class RetryUnsafeError(Exception):
     deserialize attacker-controlled data inside the agent process.
     The brain MUST supply ``task_name`` (replacing ``func_name``)
     AND ``override_args`` AND ``override_kwargs`` so the retry runs
-    with operator-vetted inputs only. See R7 audit finding H-2 (args /
-    kwargs closure) and R8 audit finding H-1 (func_name / instance
+    with operator-vetted inputs only. See audit finding H-2 (args /
+    kwargs closure) and audit finding H-1 (func_name / instance
     closure).
     """
 
@@ -76,7 +84,7 @@ _ETA_MIN = timedelta(seconds=-60)
 _ETA_MAX = timedelta(days=365)
 
 
-async def retry_task_action(  # noqa: PLR0911  engine fallbacks
+async def retry_task_action(  # noqa: PLR0911, PLR0912  broker-fallback + requeue-by-ref branches
     rq_app: Any,
     *,
     task_id: str,
@@ -98,19 +106,76 @@ async def retry_task_action(  # noqa: PLR0911  engine fallbacks
     enqueue (e.g. ``"myapp.tasks.send_email"``), supplied by the brain
     from the original task observation captured at ``task.received``.
     It replaces ``job.func_name`` which RQ lazy-deserializes from
-    pickle - see module docstring R8 H-1.
+    pickle - see module docstring.
     """
-    job = await _fetch_job(rq_app, task_id)
+    # ``_fetch_job`` performs a synchronous ``Job.fetch`` (redis-py) round
+    # trip. Offload it so a stalled broker cannot freeze the event loop.
+    try:
+        job = await offload(_fetch_job, rq_app, task_id, timeout=_OFFLOAD_TIMEOUT)
+    except OffloadTimeoutError:
+        return indeterminate_timeout_result(
+            "retry",
+            _OFFLOAD_TIMEOUT,
+            hint="the job may still be re-enqueued",
+        )
     if job is None:
         return CommandResult(
             status="success",
             result={"task_id": task_id, "noop": True, "reason": "job_not_found"},
         )
 
-    if _is_running(job):
+    # ``job.get_status()`` refreshes from Redis by default -- another sync
+    # broker read, so it is offloaded too.
+    try:
+        running = await offload(_is_running, job, timeout=_OFFLOAD_TIMEOUT)
+    except OffloadTimeoutError:
+        return indeterminate_timeout_result(
+            "retry",
+            _OFFLOAD_TIMEOUT,
+            hint="the job may still be re-enqueued",
+        )
+    if running:
         return CommandResult(
             status="failed",
             error=f"refusing to retry job {task_id!r}: still running",
+        )
+
+    # 1.7.1 (CX-M17): when the operator supplied NO explicit overrides
+    # (and no reschedule eta), re-run the ORIGINAL failed job BY
+    # REFERENCE via FailedJobRegistry.requeue. That path operates on
+    # RQ's serialized blob and lets the WORKER deserialize it in its own
+    # task context, so it never surfaces args/kwargs/func to the agent
+    # (pickle-safe like the DLQ action) AND preserves the original
+    # arguments -- which the brain cannot supply, because it stores task
+    # args/kwargs redacted. This is what makes an ordinary one-click
+    # Retry work at all; the explicit-override branch below stays for
+    # "retry with different inputs". Requeue-by-reference cannot honor an
+    # eta (it enqueues immediately), so an eta falls through to the
+    # override path, which fails closed without operator-supplied inputs.
+    if override_args is None and override_kwargs is None and eta is None:
+        try:
+            from z4j_rq.actions.dlq import _requeue_via_registry
+
+            by_ref = await offload(_requeue_via_registry, rq_app, task_id, timeout=_OFFLOAD_TIMEOUT)
+        except OffloadTimeoutError:
+            return indeterminate_timeout_result(
+                "retry",
+                _OFFLOAD_TIMEOUT,
+                hint="the job may still be re-enqueued",
+            )
+        if by_ref is not None:
+            return by_ref
+        return CommandResult(
+            status="failed",
+            error=(
+                f"refusing to retry job {task_id!r}: it is not in a "
+                "FailedJobRegistry (already succeeded, expired, or "
+                "garbage-collected), so there is no original job to requeue "
+                "by reference, and no operator override_args/override_kwargs "
+                "were supplied. The brain stores task arguments redacted and "
+                "cannot reconstruct them; use 'retry with different inputs' "
+                "to supply arguments explicitly."
+            ),
         )
 
     if eta is not None:
@@ -118,14 +183,23 @@ async def retry_task_action(  # noqa: PLR0911  engine fallbacks
         if validation is not None:
             return validation
 
-    queue = _resolve_queue(rq_app, job)
+    # Queue resolution may hit Redis (dispatcher ``queue_for`` hook, or a
+    # ``rq.Queue`` construction that touches the connection). Offload it.
+    try:
+        queue = await offload(_resolve_queue, rq_app, job, timeout=_OFFLOAD_TIMEOUT)
+    except OffloadTimeoutError:
+        return indeterminate_timeout_result(
+            "retry",
+            _OFFLOAD_TIMEOUT,
+            hint="the job may still be re-enqueued",
+        )
     if queue is None:
         return CommandResult(
             status="failed",
             error=f"could not resolve queue for job {task_id!r}",
         )
 
-    # R7 H-2 + R8 H-1 fail-closed: every value the retry needs MUST
+    # Fail-closed: every value the retry needs MUST
     # come from the brain. Reading any of job.func_name, job.args,
     # job.kwargs, job.instance triggers RQ's lazy pickle deserialization
     # inside the agent process - the RCE vector. An empty tuple / empty
@@ -139,8 +213,7 @@ async def retry_task_action(  # noqa: PLR0911  engine fallbacks
                 "task_name. RQ stores job.func_name inside the same pickle "
                 "blob as args/kwargs; the agent will not deserialize that "
                 "blob to recover the function reference. The brain must "
-                "forward task_name from its observed task record. "
-                "See R8 audit H-1."
+                "forward task_name from its observed task record."
             ),
         )
     if override_args is None or override_kwargs is None:
@@ -149,36 +222,28 @@ async def retry_task_action(  # noqa: PLR0911  engine fallbacks
             error=(
                 f"refusing to retry job {task_id!r}: missing brain-supplied "
                 "override_args / override_kwargs. RQ stores job args as "
-                "pickle by default; the agent will not deserialize them. "
-                "See R7 audit H-2."
+                "pickle by default; the agent will not deserialize them."
             ),
         )
 
+    # The actual enqueue / schedule are synchronous RQ writes to Redis. Run
+    # them in one executor hop under the same timeout.
     try:
-        if eta is not None:
-            # B18: a validated (in-bounds) eta MUST actually schedule the
-            # job. The pre-fix code validated eta then called enqueue_call
-            # (immediate), silently DROPPING the schedule. Use RQ's native
-            # scheduled path with the SAME explicit args=/kwargs= form
-            # (pickle-safe, R7/R8) rather than the splatting enqueue_at.
-            from datetime import UTC, datetime
-
-            from rq.job import JobStatus
-
-            target = datetime.fromtimestamp(eta, tz=UTC)
-            new_job = queue.create_job(
-                task_name,
-                args=tuple(override_args),
-                kwargs=dict(override_kwargs),
-                status=JobStatus.SCHEDULED,
-            )
-            queue.schedule_job(new_job, target)
-        else:
-            new_job = queue.enqueue_call(
-                func=task_name,
-                args=tuple(override_args),
-                kwargs=dict(override_kwargs),
-            )
+        new_job = await offload(
+            _enqueue_retry,
+            queue,
+            task_name,
+            override_args,
+            override_kwargs,
+            eta,
+            timeout=_OFFLOAD_TIMEOUT,
+        )
+    except OffloadTimeoutError:
+        return indeterminate_timeout_result(
+            "retry",
+            _OFFLOAD_TIMEOUT,
+            hint="the job may still be re-enqueued",
+        )
     except Exception as exc:
         return CommandResult(status="failed", error=f"retry failed: {exc}")
 
@@ -193,7 +258,44 @@ async def retry_task_action(  # noqa: PLR0911  engine fallbacks
     )
 
 
-async def _fetch_job(rq_app: Any, task_id: str) -> Any | None:
+def _enqueue_retry(
+    queue: Any,
+    task_name: str,
+    override_args: tuple[Any, ...],
+    override_kwargs: dict[str, Any],
+    eta: float | None,
+) -> Any:
+    """Synchronous enqueue / schedule of the retried job.
+
+    Extracted so the single blocking sequence of RQ Redis writes runs in one
+    executor hop. Behavior is identical to the prior inline block:
+
+    - B18: a validated (in-bounds) eta MUST actually schedule the job. The
+      pre-B18 code validated eta then called ``enqueue_call`` (immediate),
+      silently DROPPING the schedule. We use RQ's native scheduled path with
+      the SAME explicit ``args=``/``kwargs=`` form (pickle-safe)
+      rather than the splatting ``enqueue_at``.
+    """
+    if eta is not None:
+        from rq.job import JobStatus
+
+        target = datetime.fromtimestamp(eta, tz=UTC)
+        new_job = queue.create_job(
+            task_name,
+            args=tuple(override_args),
+            kwargs=dict(override_kwargs),
+            status=JobStatus.SCHEDULED,
+        )
+        queue.schedule_job(new_job, target)
+        return new_job
+    return queue.enqueue_call(
+        func=task_name,
+        args=tuple(override_args),
+        kwargs=dict(override_kwargs),
+    )
+
+
+def _fetch_job(rq_app: Any, task_id: str) -> Any | None:
     """Resolve a Job by id without raising on missing.
 
     RQ's ``Job.fetch(task_id, connection=...)`` raises

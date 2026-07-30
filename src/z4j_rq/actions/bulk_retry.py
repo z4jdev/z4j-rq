@@ -9,7 +9,7 @@ Two modes of input:
    re-enqueue up to ``max`` failed jobs. This is the "retry
    everything that blew up last hour" shape.
 
-Security (R7 H-2 + R8 H-1): the underlying :func:`retry_task_action`
+Security: the underlying:func:`retry_task_action`
 refuses to read ``job.args`` / ``job.kwargs`` / ``job.func_name`` /
 ``job.instance`` (RQ packs all four in a single pickle blob and
 lazy-loads on attribute access). Bulk retry therefore requires the
@@ -29,8 +29,7 @@ brain-side hard cap (10 000) per audit H12.
 Return shape mirrors the Celery adapter's bulk_retry:
 
     {"retried": N, "skipped": M, "capped": True|False,
-     "new_task_ids": [...], "errors": {original_id: "..."}}
-"""
+     "new_task_ids": [...], "errors": {original_id: "..."}}"""
 
 from __future__ import annotations
 
@@ -54,7 +53,7 @@ _MAX_ABSOLUTE = 10_000
 _YIELD_EVERY = 100
 
 
-async def bulk_retry_action(  # noqa: PLR0912  mode + override validation
+async def bulk_retry_action(  # noqa: PLR0912, PLR0915  mode + override validation + offload
     rq_app: Any,
     *,
     filter: dict[str, Any] | None = None,  # noqa: A002  public bulk_retry signature
@@ -67,7 +66,7 @@ async def bulk_retry_action(  # noqa: PLR0912  mode + override validation
     The brain MUST supply ``filter["overrides"]`` mapping each
     targeted ``task_id`` to ``{"args": [...], "kwargs": {...}}``.
     Jobs without a matching override entry are pickle-unsafe to
-    retry (see R7 H-2); the whole batch is refused with a
+    retry (see); the whole batch is refused with a
     ``missing_overrides`` error listing every affected id so the
     operator can decide whether to skip them or fix the call site.
     Registry-sweep mode (no explicit ids) has the same requirement -
@@ -91,17 +90,38 @@ async def bulk_retry_action(  # noqa: PLR0912  mode + override validation
         ids = explicit_ids[:effective_max]
         source = "explicit_ids"
     else:
-        # Registry sweep - walk FailedJobRegistry per queue.
-        ids = _collect_failed_ids(rq_app, limit=effective_max)
-        source = "failed_registry"
-        if len(ids) > effective_max:
-            ids = ids[:effective_max]
+        # RH4: NO broker-wide FailedJobRegistry sweep. Walking the registry
+        # re-enqueued EVERY failed job on the (typically shared) Redis broker,
+        # including jobs belonging to other projects / workloads that the brain
+        # never ownership-verified -- a cross-tenant retry. The brain now
+        # resolves the matching PROJECT-OWNED ids from its own Task rows and
+        # supplies them explicitly, so a bulk_retry that arrives with no ids has
+        # nothing to do and returns a clean no-op instead of sweeping the broker.
+        return CommandResult(
+            status="success",
+            result={
+                "retried": 0,
+                "requested": 0,
+                "skipped": 0,
+                "source": "no_explicit_ids",
+                "note": (
+                    "bulk_retry received no explicit task_ids; z4j resolves "
+                    "project-owned ids on the brain and performs no broker-wide "
+                    "failed-registry sweep."
+                ),
+            },
+        )
 
-    # R7 H-2 + R8 H-1: refuse the entire batch up-front if any
-    # single job would have triggered the pickle path. Half-retrying
-    # is worse than not retrying because the operator has no easy
-    # way to tell which ids ran and which didn't from the result
-    # envelope.
+    # 1.7.1 (CX-M17): operator-supplied overrides (per-id args/kwargs)
+    # are OPTIONAL. The brain strips them from the client filter and
+    # never generates them (it stores task args redacted), so the common
+    # path is requeue-by-reference with NO overrides -- which is what
+    # makes bulk retry work at all (the old code required overrides for
+    # every id and failed the whole batch when they were absent). An
+    # override entry, when explicitly present, is the "retry with
+    # different inputs" path and still needs a brain-supplied task_name
+    # alongside it (the agent must not deserialize RQ's
+    # pickle blob to recover the callable).
     overrides_raw = filter.get("overrides") or {}
     if not isinstance(overrides_raw, dict):
         overrides_raw = {}
@@ -109,42 +129,53 @@ async def bulk_retry_action(  # noqa: PLR0912  mode + override validation
     if not isinstance(task_names_raw, dict):
         task_names_raw = {}
 
-    missing_overrides = [jid for jid in ids if not _has_safe_override(overrides_raw.get(jid))]
-    missing_task_names = [jid for jid in ids if not _has_safe_task_name(task_names_raw.get(jid))]
-    if missing_overrides or missing_task_names:
-        return CommandResult(
-            status="failed",
-            error=(
-                "refusing bulk_retry: missing brain-supplied retry inputs - "
-                f"{len(missing_overrides)} job id(s) missing overrides, "
-                f"{len(missing_task_names)} missing task_name. RQ packs "
-                "args/kwargs/func_name in a single pickle blob; the agent "
-                "will not deserialize that blob. Supply "
-                "filter['overrides'][task_id] = {'args': [...], 'kwargs': {...}} "
-                "AND filter['task_names'][task_id] = '<dotted import path>' "
-                "per affected id. See R7 audit H-2 and R8 audit H-1."
-            ),
-            result={
-                "missing_overrides": missing_overrides,
-                "missing_task_names": missing_task_names,
-                "source": source,
-            },
-        )
-
     retried = 0
     skipped = 0
     new_ids: list[str] = []
     errors: dict[str, str] = {}
+    # M10: circuit breaker. Each retry against a hung Redis burns the full
+    # per-job offload timeout (~10s) inline on the receive loop; a large batch
+    # would freeze command handling and stall event acks for minutes while the
+    # agent still looked healthy (heartbeats keep flowing). Abort after a short
+    # run of CONSECUTIVE broker timeouts rather than grinding through every id.
+    circuit_break_after = 3
+    consecutive_timeouts = 0
+    broker_unhealthy = False
 
     for i, job_id in enumerate(ids, start=1):
-        override = overrides_raw.get(job_id) or {}
-        result = await retry_task_action(
-            rq_app,
-            task_id=job_id,
-            task_name=str(task_names_raw[job_id]),
-            override_args=tuple(override.get("args", ())),
-            override_kwargs=dict(override.get("kwargs", {})),
-        )
+        override = overrides_raw.get(job_id)
+        if _has_safe_override(override):
+            # Explicit operator inputs -> reconstruct. task_name is
+            # required for this path (retry_task_action).
+            task_name = task_names_raw.get(job_id)
+            if not _has_safe_task_name(task_name):
+                errors[job_id] = (
+                    "override supplied without a brain-known task_name; "
+                    "refusing (the agent will not deserialize RQ's pickle blob)"
+                )
+                continue
+            result = await retry_task_action(
+                rq_app,
+                task_id=job_id,
+                task_name=str(task_name),
+                override_args=tuple(override.get("args", ())),  # type: ignore[union-attr]
+                override_kwargs=dict(override.get("kwargs", {})),  # type: ignore[union-attr]
+            )
+        else:
+            # No operator override -> requeue the ORIGINAL failed job by
+            # reference (FailedJobRegistry.requeue): pickle-safe and it
+            # preserves the original arguments. retry_task_action takes
+            # that path when both override_* are None.
+            result = await retry_task_action(rq_app, task_id=job_id)
+        # An offload timeout tags result["indeterminate"] -- the broker-hang
+        # signal the breaker counts. M2: only a genuine SUCCESS resets the
+        # counter; a determinate failure is neutral (neither trips nor
+        # resets), so an alternating timeout/failure pattern cannot starve
+        # the breaker into grinding the whole batch against a hung broker.
+        if result.result and result.result.get("indeterminate"):
+            consecutive_timeouts += 1
+        elif result.status == "success":
+            consecutive_timeouts = 0
         if result.status == "success":
             if (result.result or {}).get("noop"):
                 skipped += 1
@@ -155,6 +186,13 @@ async def bulk_retry_action(  # noqa: PLR0912  mode + override validation
                     new_ids.append(str(new_id))
         else:
             errors[job_id] = result.error or "unknown"
+
+        if consecutive_timeouts >= circuit_break_after:
+            broker_unhealthy = True
+            # Everything after this id is skipped: the broker is clearly
+            # hung and grinding on would freeze the receive loop.
+            skipped += len(ids) - i
+            break
 
         # Be polite to the event loop on long batches.
         if i % _YIELD_EVERY == 0:
@@ -169,6 +207,7 @@ async def bulk_retry_action(  # noqa: PLR0912  mode + override validation
             "retried": retried,
             "skipped": skipped,
             "capped": capped or (len(ids) >= effective_max and len(explicit_ids) == 0),
+            "circuit_broken": broker_unhealthy,
             "source": source,
             "new_task_ids": new_ids,
             "errors": errors,
@@ -190,65 +229,11 @@ def _has_safe_task_name(entry: Any) -> bool:
     """A brain-supplied task_name is safe iff it's a non-empty string.
 
     Empty strings and non-strings would otherwise reach
-    :func:`retry_task_action` which fails closed for them (R8 H-1),
+    func:`retry_task_action` which fails closed for them,
     but rejecting up-front in the bulk path lets the caller see the
     full ``missing_task_names`` list in one response.
     """
     return isinstance(entry, str) and bool(entry.strip())
-
-
-def _collect_failed_ids(rq_app: Any, *, limit: int) -> list[str]:
-    """Walk every queue's FailedJobRegistry and collect failed job ids."""
-    try:
-        from rq.registry import (  # type: ignore[import-not-found]
-            FailedJobRegistry,
-        )
-    except ImportError:
-        # Test shims may stub ``rq_app.failed_job_ids`` to short-
-        # circuit the registry walk without an actual RQ install.
-        stub = getattr(rq_app, "failed_job_ids", None)
-        if callable(stub):
-            try:
-                return list(stub(limit=limit))
-            except Exception:
-                return []
-        return []
-
-    queues = _iter_queues(rq_app)
-    out: list[str] = []
-    for queue in queues:
-        if len(out) >= limit:
-            break
-        try:
-            registry = FailedJobRegistry(queue=queue)
-            # RQ's ``get_job_ids(start, end)`` is 0-indexed INCLUSIVE.
-            chunk = registry.get_job_ids(0, limit - len(out) - 1)
-            out.extend(str(jid) for jid in chunk)
-        except Exception:  # noqa: S112  best-effort per-queue failed-id scan
-            continue
-    return out
-
-
-def _iter_queues(rq_app: Any) -> list[Any]:
-    candidate = getattr(rq_app, "queues", None)
-    if candidate is not None:
-        try:
-            return list(candidate)
-        except Exception:  # noqa: S110  best-effort queues coercion
-            pass
-    try:
-        from rq import Queue  # type: ignore[import-not-found]
-    except ImportError:
-        return []
-    connection = getattr(rq_app, "connection", None)
-    if connection is None and hasattr(rq_app, "ping"):
-        connection = rq_app
-    if connection is None:
-        return []
-    try:
-        return list(Queue.all(connection=connection))
-    except Exception:
-        return []
 
 
 __all__ = ["bulk_retry_action"]

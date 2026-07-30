@@ -10,7 +10,7 @@ Security notes:
 
 - We **never** pass ``job.args`` or ``job.kwargs`` through unchanged.
   RQ defaults to pickle for job args; deserializing and forwarding
-  them would (a) violate the no-pickle rule from CLAUDE.md §2.3 and
+  them would (a) violate the no-pickle rule and
   (b) leak whatever the user put in there. Instead we forward
   ``job.description`` (RQ's own string repr - already redacted of
   type info) plus the redacted result/exception summary.
@@ -42,15 +42,15 @@ RQ_ENGINE_NAME = "rq"
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 
-# R7 H-2 plus R8 H-1: every field RQ lazy-deserializes off the
+# Plus: every field RQ lazy-deserializes off the
 # stored pickle blob. Reading ANY of these on a Job that was
 # fetched fresh from Redis (not loaded by a worker) triggers
 # ``rq.job.Job._deserialize_data`` which calls
 # ``self.serializer.loads(self.data)`` - pickle.loads on attacker-
 # controlled bytes, inside the agent process, which holds the
-# HMAC signing key. R7 H-2 closed ``args`` / ``kwargs`` only;
-# R8 H-1 added ``func_name`` and ``instance`` after the Codex
-# round-8 audit found ``retry_task_action`` still passed
+# HMAC signing key. The earlier fix covered ``args`` and
+# ``kwargs`` only; ``func_name`` and ``instance`` were added
+# because an audit found ``retry_task_action`` still passed
 # ``job.func_name`` into ``queue.enqueue_call`` despite the
 # args/kwargs gate above it.
 _PICKLE_FIELDS_FULL: frozenset[str] = frozenset(
@@ -78,7 +78,7 @@ class _PickleFieldAccessTripwire:
     use a narrower set than the retry path (which must never touch
     any of the four).
 
-    See R7 H-2 (args/kwargs closed) and R8 H-1 (func_name closure).
+    See (args/kwargs closed) and (func_name closure).
     """
 
     __slots__ = ("_forbidden", "_wrapped")
@@ -97,7 +97,7 @@ class _PickleFieldAccessTripwire:
                 f"forbidden read of job.{name} on a tripwire-wrapped Job - "
                 f"RQ stores {name} inside the same pickle blob as args / "
                 "kwargs / func_name / instance, and the agent must never "
-                "deserialize that blob (R7 H-2, R8 H-1). If you genuinely "
+                "deserialize that blob. If you genuinely "
                 "need this value, route it through brain-supplied "
                 "parameters (task_name / override_args / override_kwargs) "
                 "and never via the stored Job."
@@ -106,7 +106,7 @@ class _PickleFieldAccessTripwire:
 
 
 # Backwards-compatible alias - the class was renamed in 1.6.7 to
-# reflect its broader scope (R8 H-1 added two more forbidden fields).
+# reflect its broader scope.
 # External code importing the old name keeps working.
 _ArgsKwargsAccessTripwire = _PickleFieldAccessTripwire
 
@@ -120,8 +120,8 @@ def assert_no_args_kwargs_access(fn: _F) -> _F:
     path - which must never touch ANY of the four fields - use the
     stricter ``assert_no_pickle_field_access`` decorator below.
 
-    R7 H-2 promoted this from a docstring promise to a runtime check.
-    R8 H-1 kept the name (event-path semantics unchanged) and added
+    Promoted this from a docstring promise to a runtime check.
+    Kept the name (event-path semantics unchanged) and added
     the stricter sibling for the retry path.
     """
 

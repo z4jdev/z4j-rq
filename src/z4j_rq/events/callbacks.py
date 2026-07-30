@@ -26,7 +26,7 @@ which wraps ``rq.Worker.perform_job`` and emits the same events for
    ``perform_job``'s signature, the per-job callbacks still fire.
 
 Each callback is **wrapped in a top-level try/except** so a bug in
-z4j cannot crash the user's job. See CLAUDE.md §2.2.
+z4j cannot crash the user's job.
 """
 
 from __future__ import annotations
@@ -83,8 +83,8 @@ def capture_success(
 
     RQ passes ``(job, connection, result)`` to success callbacks. We
     accept the first positional ``job`` and ignore the rest - the
-    result body is intentionally dropped (see CLAUDE.md §2.3 - never
-    forward result values without redaction; the user opts in via
+    result body is intentionally dropped (never forward result
+    values without redaction; the user opts in via
     ``@z4j_meta(redact_result=False)`` if they want them).
     """
     _emit(EventKind.TASK_SUCCEEDED, job)
@@ -115,8 +115,8 @@ def _emit(kind: EventKind, job: Any) -> None:
     """Build the event and hand it to the installed sink.
 
     Wraps everything in a top-level try/except - a callback raising
-    inside a worker process would terminate the worker. CLAUDE.md
-    §2.2 forbids that.
+    inside a worker process would terminate the worker, which the
+    host-safety invariant forbids.
     """
     sink = _SINK
     redaction = _REDACTION

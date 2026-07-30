@@ -99,7 +99,7 @@ class TestUnsupportedActionsReportHonestly:
     async def test_dlq_now_succeeds(self, rq_app, queued_job):
         """Promoted from honest-absence to shipped feature in v2026.5.
 
-        R7 H-2 + R8 H-1: the fallback path requires brain-supplied
+        The fallback path requires brain-supplied
         task_name AND overrides because it routes through
         retry_task_action.
         """
