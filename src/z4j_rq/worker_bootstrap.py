@@ -5,20 +5,16 @@ worker``, the worker process imports ``rq.worker`` but never calls
 into ``z4j_rq`` - there is no equivalent of Celery's ``worker_init``
 signal in vanilla RQ. The user has to write a tiny bootstrap module.
 
-This helper packages that bootstrap so the user only writes one
-line. They run::
-
-    rq worker --with-scheduler -w z4j_rq.WorkerWithBootstrap
-
-OR, in their ``settings.py`` / ``rq_settings.py``::
+This helper packages that bootstrap so the user only writes one line in a
+module imported by the worker, such as ``settings.py`` or
+``rq_settings.py``::
 
     from z4j_rq import register_worker_bootstrap
 
     register_worker_bootstrap()
 
-Both paths construct an :class:`RqEngineAdapter` against the
-running connection, install the worker-wrap capture, and start the
-agent runtime via :func:`z4j_bare.install_agent`.
+The call constructs an :class:`RqEngineAdapter`, installs the worker-wrap
+capture, and starts the agent runtime via :func:`z4j_bare.install_agent`.
 
 Opt-out: set ``Z4J_DISABLED=1`` in the worker's environment.
 """
@@ -28,6 +24,8 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+
+from z4j_core.redaction import redact_url_password
 
 logger = logging.getLogger("z4j.adapter.rq.bootstrap")
 
@@ -62,10 +60,9 @@ def register_worker_bootstrap() -> None:
 
     from z4j_rq.engine import RqEngineAdapter
 
-    # ``Z4J_DEV_MODE`` is ignored when read from env (security audit
-    # C3 - the kwarg is the only trusted source because a compromised
-    # env var must not silently disable the ``wss://`` requirement).
-    # The sandbox opts in explicitly when the env var is truthy.
+    # Auto-bootstrap treats a truthy ``Z4J_DEV_MODE`` environment value as
+    # an explicit opt-in and forwards it to install_agent. This relaxes the
+    # ``wss://`` requirement, so use it only on a trusted local network.
     dev_mode = os.environ.get("Z4J_DEV_MODE", "").lower() in (
         "1",
         "true",
@@ -109,7 +106,7 @@ def _redis_protocol_hint(exc: BaseException) -> str:
 def _build_rq_app(redis_url: str) -> Any | None:
     """Construct a small object satisfying :class:`RqEngineAdapter`'s rq_app duck-type."""
     try:
-        import redis  # type: ignore[import-not-found]
+        import redis
     except ImportError:
         logger.warning(
             "z4j rq: `redis` package not importable - bootstrap aborted",
@@ -127,11 +124,14 @@ def _build_rq_app(redis_url: str) -> Any | None:
         connection = redis.Redis.from_url(redis_url)
         connection.ping()
     except Exception as exc:
+        # Both the URL and the driver's message carry the password: this runs
+        # inside the user's own worker, so an unredacted line goes straight
+        # into THEIR application logs, where it is retained and shipped on.
         logger.warning(
             "z4j rq: cannot connect to Redis at %s: %s - bootstrap "
             "aborted (worker continues without z4j)%s",
-            redis_url,
-            str(exc)[:200],
+            redact_url_password(redis_url),
+            redact_url_password(str(exc))[:200],
             _redis_protocol_hint(exc),
         )
         return None

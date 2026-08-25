@@ -7,9 +7,9 @@ the user's RQ install. Wires up:
   (:class:`z4j_rq.events.worker_wrap.RqWorkerHook`) plus the optional
   per-job callback path (:mod:`z4j_rq.events.callbacks`).
 - Discovery via :func:`z4j_rq.discovery.discover_runtime`.
-- Action implementations (retry, cancel, purge_queue) - bulk_retry,
-  DLQ, restart_worker, rate_limit are intentionally NOT implemented
-  on day 1; see :mod:`z4j_rq.capabilities`.
+- Data-plane action implementations for retry, cancel, queue purge, bounded
+  bulk retry, and failed-registry requeue. Remote worker restart, rate-limit,
+  and pool operations are absent; see :mod:`z4j_rq.capabilities`.
 
 Constructor arg ``rq_app`` is duck-typed:
 
@@ -121,11 +121,11 @@ class RqEngineAdapter:
                     return
             current_loop.call_soon_threadsafe(self._enqueue_event, event)
 
-        # Install both paths. The worker-wrap path covers every job
-        # the worker handles; the per-job callback path is a back-
-        # stop for users who attach callbacks explicitly. They
-        # produce the same Event shape - duplicates are deduped on
-        # the brain via the (event_id, occurred_at) UNIQUE index.
+        # Install both paths. The worker-wrap path is canonical and covers
+        # every job the worker handles. The callback sink remains available
+        # for explicit per-job use, but applications should not attach those
+        # callbacks to jobs already covered by this hook because the two paths
+        # produce independent event ids.
         install_callbacks(sink=sink, redaction=self.redaction)
         self._worker_hook = RqWorkerHook(sink=sink, redaction=self.redaction)
         self._worker_hook.install()
@@ -357,9 +357,8 @@ class RqEngineAdapter:
     # ------------------------------------------------------------------
     # QueueEngineAdapter - data-plane actions
     #
-    # Shipped in v2026.5: retry, cancel, purge, bulk_retry,
-    # requeue_dead_letter. Honest absences below: rate_limit /
-    # restart_worker / pool ops (engine constraints - never).
+    # Implemented: retry, cancel, purge, bulk_retry, requeue_dead_letter.
+    # Honest absences below: rate_limit, restart_worker, and pool ops.
     # ------------------------------------------------------------------
 
     async def submit_task(
@@ -372,10 +371,18 @@ class RqEngineAdapter:
         eta: float | None = None,
         priority: int | None = None,
     ) -> CommandResult:
-        """Universal enqueue via ``Queue.enqueue(name, ...)``.
+        """Enqueue immediately or schedule via an RQ queue.
 
         ``name`` is RQ's import path string ("module.path.func").
         """
+        if priority is not None:
+            return CommandResult(
+                status="failed",
+                error=(
+                    "RQ does not support portable per-job priority; "
+                    "route priority classes to separate queues"
+                ),
+            )
         try:
             queue_name = queue or "default"
             q = None
@@ -387,7 +394,17 @@ class RqEngineAdapter:
 
                 connection = getattr(self.rq_app, "connection", self.rq_app)
                 q = Queue(name=queue_name, connection=connection)
-            job = q.enqueue(name, *args, **(kwargs or {}))
+            if eta is not None:
+                from datetime import UTC, datetime
+
+                job = q.enqueue_at(
+                    datetime.fromtimestamp(eta, tz=UTC),
+                    name,
+                    args=tuple(args),
+                    kwargs=dict(kwargs or {}),
+                )
+            else:
+                job = q.enqueue(name, *args, **(kwargs or {}))
             new_id = getattr(job, "id", None)
         except Exception as exc:
             return CommandResult(status="failed", error=str(exc))
@@ -503,7 +520,7 @@ class RqEngineAdapter:
     # ------------------------------------------------------------------
 
     def capabilities(self) -> set[str]:
-        """Return the honest day-1 capability set.
+        """Return the capabilities the adapter currently implements.
 
         This drives dashboard button-gating; lying here corrupts the
         UX and gets us dunked on (multi-engine plan §3 N5).

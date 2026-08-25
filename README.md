@@ -1,18 +1,18 @@
 # z4j-rq
 
-[![PyPI version](https://img.shields.io/pypi/v/z4j-rq.svg?v=1.8.0)](https://pypi.org/project/z4j-rq/)
-[![Python](https://img.shields.io/pypi/pyversions/z4j-rq.svg?v=1.8.0)](https://pypi.org/project/z4j-rq/)
-[![License](https://img.shields.io/pypi/l/z4j-rq.svg?v=1.8.0)](https://github.com/z4jdev/z4j-rq/blob/main/LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/z4j-rq.svg)](https://pypi.org/project/z4j-rq/)
+[![Python](https://img.shields.io/pypi/pyversions/z4j-rq.svg)](https://pypi.org/project/z4j-rq/)
+[![License](https://img.shields.io/pypi/l/z4j-rq.svg)](https://github.com/z4jdev/z4j-rq/blob/main/LICENSE)
 
 The RQ engine adapter for [z4j](https://z4j.com).
 
-Streams every RQ job lifecycle event from your workers to z4j
+Streams supported RQ job lifecycle events from your workers to z4j
 and accepts operator control actions from the dashboard. Pair with
 z4j-rqscheduler to manage periodic schedules.
 
 ## Compatibility
 
-- RQ 1.10+ and <3 (capped below the RQ 3.0 breaking-major rewrite)
+- RQ 1.10.1+ and <3 (capped below the RQ 3.0 breaking-major rewrite)
 - Python 3.11+
 
 Full per-adapter matrix at <https://z4j.dev/reference/compatibility/>.
@@ -24,7 +24,7 @@ Full per-adapter matrix at <https://z4j.dev/reference/compatibility/>.
 | Job lifecycle events | started, succeeded, failed, revoked (canceled) |
 | Job discovery | runtime registry of queue names + worker introspection |
 | Submit / retry / cancel | direct against the RQ queue |
-| Bulk retry | filter-driven; re-enqueues matching jobs from the failed registry |
+| Bulk retry | retries brain-resolved, project-owned explicit IDs by reference; never sweeps the broker-wide failed registry |
 | Purge queue | with confirm-token guard |
 | Reconcile task | via Redis-backed job hash lookup |
 
@@ -49,10 +49,11 @@ pip install z4j-bare    z4j-rq z4j-rqscheduler   # framework-free worker
 
 ## Reliability
 
-- No exception from the adapter ever propagates back into your RQ
-  workers or job hooks.
-- Events buffer locally when z4j is unreachable; workers never
-  block on network I/O.
+- Lifecycle-capture failures are isolated from RQ workers and job hooks;
+  capture hooks make no brain network request inline.
+- The in-process event queue and SQLite outbound buffer are bounded. Queue
+  overflow drops new events and buffer pressure evicts oldest rows; both losses
+  are logged.
 
 ## Documentation
 

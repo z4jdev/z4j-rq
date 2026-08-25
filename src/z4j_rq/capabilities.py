@@ -3,8 +3,8 @@
 RQ has a narrower surface than Celery - RQ's worker model has no
 remote-control channel (no remote restart, no remote pool grow/
 shrink, no remote rate-limit). But within the "data-plane"
-actions, z4j-rq is now feature-complete: retry, cancel, purge,
-bulk_retry, requeue_dead_letter all ship in this release.
+actions, z4j-rq implements retry, cancel, purge, bulk_retry, and
+requeue_dead_letter.
 
 See `docs/MULTI_ENGINE_PLAN.md` §5 for the per-engine matrix and
 §3 N5 for why honest capability reporting is a non-negotiable.
@@ -15,14 +15,10 @@ from __future__ import annotations
 DEFAULT_CAPABILITIES: frozenset[str] = frozenset(
     {
         "submit_task",
-        # Per-task data-plane actions - shipped in v2026.5
+        # Per-task data-plane actions.
         "retry_task",
         "cancel_task",
         "purge_queue",
-        # v1.1 promotions - both ship in v2026.5 alongside the
-        # RQ+Dramatiq GA. See docs/MULTI_ENGINE_PLAN.md §7 scope
-        # cuts list; these were originally deferred but round-2
-        # landed them together.
         "bulk_retry",
         "requeue_dead_letter",
     },

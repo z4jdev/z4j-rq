@@ -128,7 +128,7 @@ class TestCaptureCallbacksAreBoundary:
 
 
 class TestWorkerWrapLifecycle:
-    """The patch into ``rq.Worker.perform_job`` must be reversible.
+    """The patch into the ``rq.Worker.execute_job`` owner must be reversible.
 
     If `disconnect_signals` is called (e.g. agent shutdown), the
     original method MUST come back exactly as it was. Otherwise a
@@ -136,18 +136,69 @@ class TestWorkerWrapLifecycle:
     leave broken behaviour after agent death.
     """
 
-    def test_install_uninstall_when_rq_missing_is_silent(self):
-        # In the unit-test env we don't have rq installed. install()
-        # must silently no-op rather than crash the engine adapter.
-        hook = RqWorkerHook(sink=lambda _e: None, redaction=RedactionEngine())
-        hook.install()
-        hook.uninstall()  # should also no-op cleanly
+    def test_install_uninstall_when_rq_missing_is_silent(self, monkeypatch):
+        import builtins
 
-    def test_install_is_idempotent(self):
+        from z4j_rq.events import worker_wrap
+
+        real_import = builtins.__import__
+
+        def _without_rq_worker(name, *args, **kwargs):
+            if name == "rq.worker":
+                raise ImportError("forced missing rq.worker")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _without_rq_worker)
+        assert worker_wrap._resolve_execute_job_owner() is None
+
         hook = RqWorkerHook(sink=lambda _e: None, redaction=RedactionEngine())
         hook.install()
-        hook.install()  # second call must not double-wrap nor raise
+        assert not hook._installed
         hook.uninstall()
+
+    def test_install_is_idempotent(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from z4j_rq.events import worker_wrap
+
+        calls: list[str] = []
+
+        class LocalWorker:
+            name = "worker-1"
+
+            def execute_job(self, job, queue):
+                del self, job, queue
+                calls.append("original")
+                return "result"
+
+        original_descriptor = LocalWorker.__dict__["execute_job"]
+        monkeypatch.setattr(worker_wrap, "_ORIGINAL_EXECUTE_JOB", None)
+        monkeypatch.setattr(worker_wrap, "_resolve_execute_job_owner", lambda: LocalWorker)
+        monkeypatch.setattr(
+            worker_wrap,
+            "build_event",
+            lambda *, kind, job, redaction: kind,
+        )
+        monkeypatch.setattr(
+            worker_wrap,
+            "_read_job_outcome",
+            lambda job: EventKind.TASK_SUCCEEDED,
+        )
+        emitted = []
+        hook = RqWorkerHook(sink=emitted.append, redaction=RedactionEngine())
+
+        hook.install()
+        patched_descriptor = LocalWorker.__dict__["execute_job"]
+        hook.install()
+        assert LocalWorker.__dict__["execute_job"] is patched_descriptor
+
+        job = SimpleNamespace(worker_name=None)
+        assert LocalWorker().execute_job(job, object()) == "result"
+        assert calls == ["original"]
+        assert emitted == [EventKind.TASK_STARTED, EventKind.TASK_SUCCEEDED]
+
+        hook.uninstall()
+        assert LocalWorker.__dict__["execute_job"] is original_descriptor
 
 
 # ---------------------------------------------------------------------------

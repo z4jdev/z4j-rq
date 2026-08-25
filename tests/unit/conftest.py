@@ -1,8 +1,8 @@
 """Shared fixtures for z4j-rq unit tests.
 
-Fakes here let the entire z4j-rq surface run without ``rq`` /
-``redis`` actually installed. Integration tests (separate matrix
-leg) use real RQ + a real Redis container.
+Fakes here let the z4j-rq unit surface run without ``rq`` / ``redis``
+actually installed. They keep this suite hermetic, but do not prove that
+real RQ and Redis interoperate; only a required real-broker lane can do that.
 """
 
 from __future__ import annotations

@@ -1,18 +1,20 @@
 """RQ adapter actions exposed via :class:`RqEngineAdapter`.
 
-Day-1 surface (per `docs/MULTI_ENGINE_PLAN.md` §5):
+Implemented data-plane surface:
 
 - :func:`retry_task_action` - re-enqueue a job by id.
-- :func:`cancel_task_action` - best-effort cancel; queued jobs are
-  removed, started jobs are tagged for stop. RQ has no hard kill
-  outside the user opting into the ``StoppedJobRegistry`` flow.
+- :func:`cancel_task_action` - best-effort cancel; queued jobs are removed.
+  On RQ 1.13+, a started job receives RQ's ``stop-job`` command and the
+  worker terminates its matching work horse. A successful publish does not
+  verify that the worker received the command or that termination completed.
 - :func:`purge_queue_action` - empty a queue with a confirm-token
   guard mirroring the Celery adapter.
+- :func:`bulk_retry_action` - retry a bounded set of failed jobs.
+- :func:`requeue_dead_letter_action` - move jobs from RQ's failed registry
+  back to their origin queue.
 
-Deferred to v1.1 (also in §5):
-
-- bulk_retry, requeue_dead_letter, restart_worker, rate_limit,
-  pool ops, consumer ops.
+RQ does not expose remote worker restart, rate-limit, pool-size, or consumer
+operations, so those capabilities are not advertised.
 
 Each module here is independent and unit-tested with a fake RQ
 ``Queue`` + ``Job`` from ``tests/unit/conftest.py``.

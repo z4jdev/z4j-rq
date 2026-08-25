@@ -1,9 +1,9 @@
-"""Wrap ``rq.Worker.execute_job`` to capture every job's lifecycle.
+"""Wrap ``rq.Worker.execute_job`` to attempt parent-side lifecycle capture.
 
 This is the **canonical** RQ event-capture path. By monkey-patching
-``Worker.execute_job`` at ``connect_signals`` time we observe every
-job the worker handles - even jobs that were enqueued before z4j
-was installed and have no per-job callback attached.
+``Worker.execute_job`` at ``connect_signals`` time we intercept jobs the worker
+handles, including jobs enqueued before z4j was installed with no per-job
+callback. Event building or sink delivery can still fail and drop an event.
 
 **Why ``execute_job`` and not ``perform_job``?** RQ 2.x's default
 ``Worker.execute_job`` forks a work-horse process for every job;
@@ -45,9 +45,9 @@ Safety properties:
 - The patch is *idempotent*: calling :meth:`install` twice has the
   same effect as calling it once. Calling :meth:`uninstall` restores
   the original method.
-- The patch is *boundary-safe*: every callback runs through
-  ``safe_call``-equivalent handling. A bug in the wrapper cannot
-  crash the worker - at worst we drop the event.
+- Event building and sink calls catch ordinary ``Exception`` failures and drop
+  the event. The original worker call and process-lifecycle exceptions retain
+  RQ's normal propagation behavior.
 """
 
 from __future__ import annotations

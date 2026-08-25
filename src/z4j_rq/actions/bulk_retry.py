@@ -1,35 +1,25 @@
 """``bulk_retry`` action - re-enqueue many RQ jobs in a single command.
 
-Two modes of input:
+The command accepts only explicit project-owned job ids in
+``filter["task_ids"]`` or ``task_ids``. With no explicit ids it returns a
+successful no-op; it never sweeps the broker-wide failed-job registry.
 
-1. **Explicit ids** - ``filter["task_ids"]`` is a list of job ids.
-   We fetch each, re-enqueue on its origin queue, stop at ``max``.
-2. **FailedJobRegistry sweep** - no explicit ids. We walk the
-   ``FailedJobRegistry`` for each queue the rq_app knows about and
-   re-enqueue up to ``max`` failed jobs. This is the "retry
-   everything that blew up last hour" shape.
-
-Security: the underlying:func:`retry_task_action`
-refuses to read ``job.args`` / ``job.kwargs`` / ``job.func_name`` /
-``job.instance`` (RQ packs all four in a single pickle blob and
-lazy-loads on attribute access). Bulk retry therefore requires the
-brain to supply per-job overrides AND per-job task_name:
+Security: without overrides the adapter requeues the original failed job by
+reference, so it does not deserialize RQ's pickled args, kwargs, callable, or
+instance. Optional per-job overrides require a brain-supplied task name:
 
     filter["overrides"]   = {task_id: {"args": [...], "kwargs": {...}}}
     filter["task_names"]  = {task_id: "myapp.tasks.send_email", ...}
 
-If any single targeted job lacks either entry the whole batch is
-refused so the operator gets a precise "these ids would have been
-pickle-unsafe" list rather than a half-retried mess.
-
-Both modes are batched: we yield every 100 jobs so we don't hold
+The explicit-id mode is batched: we yield every 100 jobs so we don't hold
 the asyncio event loop hostage. The ``max`` ceiling matches the
 brain-side hard cap (10 000) per audit H12.
 
 Return shape mirrors the Celery adapter's bulk_retry:
 
     {"retried": N, "skipped": M, "capped": True|False,
-     "new_task_ids": [...], "errors": {original_id: "..."}}"""
+     "new_task_ids": [...], "errors": {original_id: "..."}}
+"""
 
 from __future__ import annotations
 
@@ -63,15 +53,11 @@ async def bulk_retry_action(  # noqa: PLR0912, PLR0915  mode + override validati
 ) -> CommandResult:
     """Re-enqueue up to ``max`` jobs; returns a summary dict.
 
-    The brain MUST supply ``filter["overrides"]`` mapping each
-    targeted ``task_id`` to ``{"args": [...], "kwargs": {...}}``.
-    Jobs without a matching override entry are pickle-unsafe to
-    retry (see); the whole batch is refused with a
-    ``missing_overrides`` error listing every affected id so the
-    operator can decide whether to skip them or fix the call site.
-    Registry-sweep mode (no explicit ids) has the same requirement -
-    the brain must look up the discovered ids and supply overrides
-    before invoking the action again.
+    The brain must supply explicit project-owned ids. With no overrides, the
+    original failed jobs are requeued by reference without deserializing their
+    payloads. An optional override entry must have a corresponding task name;
+    only that job fails validation when the name is missing. With no explicit
+    ids the command returns a successful no-op and does not scan the broker.
     """
     filter = filter or {}  # noqa: A001  public bulk_retry signature
     effective_max = min(max, _MAX_ABSOLUTE)

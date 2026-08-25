@@ -75,6 +75,44 @@ class TestSubmitTask:
         assert q.submit_calls[0]["name"] == "myapp.tasks.heavy"
         assert q.submit_calls[0]["kwargs"] == {"x": 1}
 
+    async def test_eta_schedules_at_absolute_timestamp(self, rq_app) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        _patch_enqueue(rq_app)
+        adapter = RqEngineAdapter(rq_app=rq_app)
+        target = datetime.now(UTC) + timedelta(minutes=5)
+
+        result = await adapter.submit_task(
+            "myapp.tasks.delayed",
+            args=(1,),
+            kwargs={"key": "value"},
+            eta=target.timestamp(),
+        )
+
+        assert result.status == "success"
+        q = rq_app.queue_for_name("default")
+        assert q.submit_calls == []
+        assert q.scheduled_calls == [
+            {
+                "at": target,
+                "name": "myapp.tasks.delayed",
+                "args": (1,),
+                "kwargs": {"key": "value"},
+            }
+        ]
+
+    async def test_priority_is_rejected_instead_of_silently_ignored(self, rq_app) -> None:
+        _patch_enqueue(rq_app)
+        adapter = RqEngineAdapter(rq_app=rq_app)
+
+        result = await adapter.submit_task("myapp.tasks.x", priority=9)
+
+        assert result.status == "failed"
+        assert "priority" in (result.error or "")
+        q = rq_app.queue_for_name("default")
+        assert q.submit_calls == []
+        assert q.scheduled_calls == []
+
     async def test_broker_failure_returns_failed_result(self, rq_app) -> None:
         """If ``Queue.enqueue`` raises, the adapter returns a clean
         ``CommandResult(status="failed", error=...)`` instead of
@@ -123,13 +161,30 @@ def _patch_enqueue(rq_app) -> None:
 
         return _enqueue
 
+    def make_enqueue_at(queue):
+        def _enqueue_at(at, name, *args, **kwargs):
+            new_id = f"submit-{len(queue.scheduled_calls) + 1}"
+            queue.scheduled_calls.append(
+                {
+                    "at": at,
+                    "name": name,
+                    "args": tuple(kwargs.pop("args", args)),
+                    "kwargs": dict(kwargs.pop("kwargs", {})),
+                }
+            )
+            return _FakeJob(id=new_id)
+
+        return _enqueue_at
+
     original = rq_app.queue_for_name
 
     def patched(name: str):
         q = original(name)
         if not hasattr(q, "submit_calls"):
             q.submit_calls = []  # type: ignore[attr-defined]
+            q.scheduled_calls = []  # type: ignore[attr-defined]
             q.enqueue = make_enqueue(q)  # type: ignore[attr-defined]
+            q.enqueue_at = make_enqueue_at(q)  # type: ignore[attr-defined]
         return q
 
     rq_app.queue_for_name = patched  # type: ignore[method-assign]
@@ -137,4 +192,6 @@ def _patch_enqueue(rq_app) -> None:
     default = rq_app._queues["default"]
     if not hasattr(default, "submit_calls"):
         default.submit_calls = []  # type: ignore[attr-defined]
+        default.scheduled_calls = []  # type: ignore[attr-defined]
         default.enqueue = make_enqueue(default)  # type: ignore[attr-defined]
+        default.enqueue_at = make_enqueue_at(default)  # type: ignore[attr-defined]

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.0 (2026-08-25)
+
+* Purge action correction carried with the fleet release.
+* Correct the RQ dependency floor to 1.10.1. RQ 1.10.0 cannot import on Python 3.12 and later.
+
 ## 1.8.0 (2026-07-23)
 
 * The adapter now attests its safe by-reference retry contract to the exact agent session and requires the coordinated 1.8.0 bare/core runtime.

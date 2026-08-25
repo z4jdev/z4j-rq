@@ -1,14 +1,15 @@
 """``purge_queue`` action - empty an RQ queue.
 
-Mirror of the Celery purge action's safety properties (audit H13 / M-7):
+Mirror of the Celery purge action's safety properties:
 
 - The brain attaches a ``confirm_token`` -- a keyed
   ``HMAC(project_secret, "purge|queue|depth")`` (see
   ``z4j_core.purge_token``) -- to every purge command. The adapter
   recomputes it locally against the *current* depth + its own
-  per-project secret and rejects the action on mismatch. Keying (M-7)
-  means a depth-observer cannot forge or refresh a token. A pre-1.7
-  unkeyed token is accepted during a grace window (with a warning).
+  per-project secret and rejects the action on mismatch. Keying
+  means a depth-observer cannot forge or refresh a token for another
+  depth. A pre-1.7 unkeyed token is accepted only when the operator
+  explicitly enables ``Z4J_ACCEPT_LEGACY_PURGE_TOKEN``.
 - ``force=True`` bypasses both the token check and the depth-
   threshold guard. Reserved for emergency tooling.
 - The ``Z4J_PURGE_THRESHOLD`` env var caps the depth above which
@@ -45,8 +46,8 @@ def _resolve_agent_secret() -> bytes | None:
     """Raw per-project secret for keying the confirm token, or None.
 
     Reads + decodes ``Z4J_HMAC_SECRET`` the same way frame signing does;
-    None (absent/undecodable) leaves only the legacy unkeyed token
-    verifiable during the grace window.
+    None (absent/undecodable) leaves only an explicitly enabled legacy
+    unkeyed token verifiable.
     """
     raw = os.environ.get("Z4J_HMAC_SECRET")
     if not raw:

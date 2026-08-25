@@ -5,21 +5,17 @@
 If you believe you have found a security vulnerability in `z4j-rq`,
 **do not open a public GitHub issue**. Email `security@z4j.com` instead.
 
-We follow the [disclose.io](https://disclose.io) baseline:
-
-- Initial acknowledgement within **72 hours**.
-- Coordinated disclosure timeline agreed before public release.
-- Credit in the release notes (unless you prefer to remain anonymous).
-
-PGP key and the full disclosure policy live in the
-[z4j project security policy](https://github.com/z4jdev/z4j/blob/main/SECURITY.md).
-
-## Supported versions
-
-Only the latest minor release receives security fixes. See
-[CHANGELOG.md](CHANGELOG.md) for the current version.
+We acknowledge reports within **48 hours**, provide a preliminary assessment
+within **5 business days**, and target fixes within **30 days** (**7 days** for
+confirmed critical issues). Reporting timelines, safe harbor, supported-version
+policy, and published advisories are maintained in the
+[canonical z4j project security policy](https://github.com/z4jdev/z4j/blob/main/SECURITY.md).
 
 ## Security-critical surface
 
-This package has no package-specific security-critical surface beyond
-the generic ones owned by `z4j-core` (transport / redaction / policy).
+This adapter runs inside RQ workers with their Redis access. An authenticated
+brain can submit, retry, cancel, purge, and requeue jobs. Callable/argument
+validation, avoiding agent-side deserialization of broker-controlled pickles,
+project-scoped bulk selection, confirm tokens, and worker event wrapping are
+package-specific security surfaces; transport, redaction, and authorization
+policy remain owned by `z4j-core` and the brain.

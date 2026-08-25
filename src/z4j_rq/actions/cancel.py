@@ -1,19 +1,20 @@
 """``cancel`` action - best-effort cancel an RQ Job.
 
-RQ does not support a hard cancel of an already-running job (no
-remote SIGTERM-equivalent). The capability set advertised by
-:mod:`z4j_rq.capabilities` already declares this honestly: dashboard
-users running RQ see a Cancel button that *only* removes queued
-jobs, and the engine adapter rejects cancel attempts on running
-jobs with a clear error rather than silently succeeding.
+RQ supports two different operations behind the shared ``cancel`` action.
+Queued jobs are removed from their queue. On RQ 1.13 and newer, an already
+running job receives RQ's ``stop-job`` command: the owning worker terminates
+the work horse when it handles that command. Publishing the command is
+best-effort and does not prove that the worker received it or that the job
+stopped.
 
 The implementation:
 
 - **Queued** jobs are removed via ``Job.cancel()`` (RQ 2.x API).
-- **Started** jobs are tagged via ``send_stop_job_command`` if the
-  caller's RQ version supports it (RQ 1.13+); the worker checks
-  the tag at the next iteration. We return ``status="success"``
-  with ``soft=True`` so the audit log captures the soft-cancel.
+- **Started** jobs receive ``send_stop_job_command`` when the installed RQ
+  version supports it (RQ 1.13+). RQ publishes to the owning worker, which
+  terminates the matching work horse when it handles the command. We return
+  ``status="success"`` with ``soft=True`` to mean "request published, outcome
+  not verified", not "the running process was left alive".
 - **Already-finished** jobs return success with ``noop=True``.
 - **Missing** jobs return success with ``noop=True``. Same rationale
   as in :mod:`z4j_rq.actions.retry` - idempotent for caller ergonomics.
@@ -96,7 +97,10 @@ async def cancel_task_action(rq_app: Any, *, task_id: str) -> CommandResult:  # 
                 hint="the stop command may still reach the worker",
             )
         except Exception as exc:
-            return CommandResult(status="failed", error=f"soft-cancel failed: {exc}")
+            return CommandResult(
+                status="failed",
+                error=f"running-job stop request failed: {exc}",
+            )
 
     # Queued / deferred / scheduled - Job.cancel handles all three.
     # Job.cancel is synchronous Redis I/O.
@@ -151,13 +155,16 @@ def _soft_cancel_started(
     try:
         send_stop_job_command(connection, task_id)
     except Exception as exc:
-        return CommandResult(status="failed", error=f"soft-cancel failed: {exc}")
+        return CommandResult(
+            status="failed",
+            error=f"running-job stop request failed: {exc}",
+        )
     return CommandResult(
         status="success",
         result={
             "task_id": task_id,
             "soft": True,
-            "note": "stop command sent; worker will honor at next iteration",
+            "note": "stop command published; job termination was not verified",
         },
     )
 

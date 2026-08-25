@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 import time
+from types import ModuleType
 
 import pytest
 from z4j_rq.actions.cancel import cancel_task_action
@@ -257,6 +259,36 @@ class TestCancel:
         result = await cancel_task_action(rq_app, task_id="ghost")
         assert result.status == "success"
         assert result.result["noop"] is True
+
+    @pytest.mark.asyncio
+    async def test_started_cancel_reports_published_but_unverified(
+        self,
+        rq_app,
+        started_job,
+        monkeypatch,
+    ):
+        calls = []
+
+        rq_module = ModuleType("rq")
+        rq_module.__path__ = []  # type: ignore[attr-defined]
+        command_module = ModuleType("rq.command")
+
+        def send_stop_job_command(connection, task_id):
+            calls.append((connection, task_id))
+
+        command_module.send_stop_job_command = send_stop_job_command  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "rq", rq_module)
+        monkeypatch.setitem(sys.modules, "rq.command", command_module)
+
+        result = await cancel_task_action(rq_app, task_id=started_job.id)
+
+        assert result.status == "success"
+        assert result.result == {
+            "task_id": started_job.id,
+            "soft": True,
+            "note": "stop command published; job termination was not verified",
+        }
+        assert calls == [(rq_app.connection, started_job.id)]
 
 
 class TestPurge:

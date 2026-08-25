@@ -16,17 +16,17 @@ into z4j they can attach these callbacks at job-creation time::
 But forcing every user to remember the callbacks is bad UX and
 loses jobs that were enqueued before z4j was installed. The
 canonical capture path is :class:`z4j_rq.events.worker_wrap.RqWorkerHook`,
-which wraps ``rq.Worker.perform_job`` and emits the same events for
+which wraps the class that owns ``rq.Worker.execute_job`` and emits the same events for
 *every* job - no opt-in. The standalone callbacks here are kept for:
 
 1. Users who want explicit, per-job control.
-2. The (eventual) integration test suite, which uses them to assert
-   the mapper produces the right shape without needing a worker.
+2. Focused tests which assert the mapper shape without needing a worker.
 3. Defense in depth - if a future RQ release changes
-   ``perform_job``'s signature, the per-job callbacks still fire.
+   ``execute_job``'s signature, the per-job callbacks still fire.
 
-Each callback is **wrapped in a top-level try/except** so a bug in
-z4j cannot crash the user's job.
+Each callback catches ordinary ``Exception`` failures from event construction
+or the sink, logs them, and drops the event. Process-lifecycle exceptions still
+propagate.
 """
 
 from __future__ import annotations
@@ -114,9 +114,8 @@ def capture_stopped(job: Any, *_args: Any, **_kwargs: Any) -> None:
 def _emit(kind: EventKind, job: Any) -> None:
     """Build the event and hand it to the installed sink.
 
-    Wraps everything in a top-level try/except - a callback raising
-    inside a worker process would terminate the worker, which the
-    host-safety invariant forbids.
+    Ordinary ``Exception`` failures are logged and dropped so event-capture
+    bugs do not terminate the worker. Process-lifecycle exceptions propagate.
     """
     sink = _SINK
     redaction = _REDACTION
