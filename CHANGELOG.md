@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.1 (2026-08-26)
+
+* The dead-letter requeue is now reachable. This adapter's implementation was
+  already complete and is safe for a structural reason: `FailedJobRegistry` is
+  RQ's dead-letter concept, and `registry.requeue` consumes the entry and
+  preserves its original routing rather than publishing a copy. What was missing
+  was a brain endpoint that issued the command, so nothing could trigger it.
+* Otherwise carried with the coordinated fleet release.
+
 ## 1.9.0 (2026-08-25)
 
 * Purge action correction carried with the fleet release.
