@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.9.1 (2026-08-26)
+## 1.10.0 (2026-08-28)
+
+* Carried with the coordinated fleet release. No behaviour changed.
+
+## 1.9.1 (2026-08-27)
 
 * The dead-letter requeue is now reachable. This adapter's implementation was
   already complete and is safe for a structural reason: `FailedJobRegistry` is
