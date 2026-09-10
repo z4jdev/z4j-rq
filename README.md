@@ -49,6 +49,25 @@ pip install z4j-bare    z4j-rq z4j-rqscheduler   # framework-free worker
 
 ## Reliability
 
+- For POSIX fork workers, select the memory-corrected worker through RQ's
+  standard CLI extension point:
+
+  ```bash
+  rq worker --worker-class z4j_rq.worker.Worker default
+  ```
+
+  Keep your existing queues, Redis options, settings module and z4j startup
+  integration. In Python, import `Worker` from `z4j_rq.worker` instead of `rq`.
+  The worker sets each job's environment only in its child process, preventing
+  the parent-side native allocation growth reproduced with stock RQ on glibc.
+  RQ retains execution, monitoring, timeout, retry and shutdown handling; the
+  RQ 1.x session and RQ 2.x process-group behavior are preserved.
+- Selecting this class is explicit. Installing the adapter alone does not
+  replace stock or custom workers. `SimpleWorker`, `SpawnWorker` and Windows
+  workers are outside this fork-worker repair. If you retain an affected stock
+  fork worker, use `--max-jobs 50000` with a process manager configured to
+  restart successful exits. Normal supervision and application memory limits
+  remain useful with either worker.
 - Lifecycle-capture failures are isolated from RQ workers and job hooks;
   capture hooks make no brain network request inline.
 - The in-process event queue and SQLite outbound buffer are bounded. Queue
@@ -62,6 +81,8 @@ Full docs at [z4j.dev/engines/rq/](https://z4j.dev/engines/rq/).
 ## License
 
 Apache-2.0, see [LICENSE](LICENSE).
+The fork boundary adapted from RQ retains its BSD-2-Clause notice in
+[`RQ_LICENSE`](src/z4j_rq/RQ_LICENSE), included in the installed package.
 
 ## Links
 

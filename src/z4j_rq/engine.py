@@ -26,6 +26,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import threading
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -43,6 +45,7 @@ from z4j_core.models import (
 from z4j_core.redaction.engine import RedactionEngine
 from z4j_core.version import PROTOCOL_VERSION
 
+from z4j_rq._offload import OffloadTimeoutError, indeterminate_timeout_result, offload
 from z4j_rq.actions import (
     bulk_retry_action,
     cancel_task_action,
@@ -58,6 +61,9 @@ from z4j_rq.events.mapper import RQ_ENGINE_NAME
 from z4j_rq.events.worker_wrap import RqWorkerHook
 
 logger = logging.getLogger("z4j.adapter.rq.engine")
+
+# Bound the wait without claiming that an in-flight broker publish was cancelled.
+_SUBMIT_TIMEOUT = 10.0
 
 
 class RqEngineAdapter:
@@ -88,6 +94,9 @@ class RqEngineAdapter:
         self.rq_app = rq_app
         self.redaction = redaction or RedactionEngine()
         self._event_queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=10_000)
+        self._event_loss_lock = threading.Lock()
+        self._event_loss_pid = os.getpid()
+        self._dropped_event_count = 0
         self._worker_hook: RqWorkerHook | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -141,6 +150,27 @@ class RqEngineAdapter:
         uninstall_callbacks()
         self._loop = None
 
+    @property
+    def dropped_event_count(self) -> int:
+        """Cumulative queue overflow loss for this adapter instance; no broker I/O."""
+        self._reset_inherited_loss_counter()
+        with self._event_loss_lock:
+            return self._dropped_event_count
+
+    def _reset_inherited_loss_counter(self) -> None:
+        # post_fork can reuse the adapter object. Never acquire a lock held
+        # by a vanished parent thread or attribute its drops to the child.
+        pid = os.getpid()
+        if self._event_loss_pid != pid:
+            self._event_loss_lock = threading.Lock()
+            self._dropped_event_count = 0
+            self._event_loss_pid = pid
+
+    def _record_event_drop(self) -> None:
+        self._reset_inherited_loss_counter()
+        with self._event_loss_lock:
+            self._dropped_event_count = min(self._dropped_event_count + 1, 2**53 - 1)
+
     def _enqueue_event(self, event: Event) -> None:
         """Push an Event onto the internal queue, dropping oldest when full."""
         for _attempt in range(3):
@@ -150,12 +180,14 @@ class RqEngineAdapter:
             except asyncio.QueueFull:
                 try:
                     dropped = self._event_queue.get_nowait()
+                    self._record_event_drop()
                     logger.warning(
                         "z4j rq: event queue full, dropped event kind=%s",
                         getattr(dropped, "kind", "?"),
                     )
                 except asyncio.QueueEmpty:
                     pass
+        self._record_event_drop()
         logger.error(
             "z4j rq: failed to enqueue event after retries kind=%s",
             getattr(event, "kind", "?"),
@@ -383,7 +415,8 @@ class RqEngineAdapter:
                     "route priority classes to separate queues"
                 ),
             )
-        try:
+
+        def _submit() -> Any:
             queue_name = queue or "default"
             q = None
             queue_for_name = getattr(self.rq_app, "queue_for_name", None)
@@ -405,7 +438,18 @@ class RqEngineAdapter:
                 )
             else:
                 job = q.enqueue(name, *args, **(kwargs or {}))
-            new_id = getattr(job, "id", None)
+            return getattr(job, "id", None)
+
+        try:
+            # Publishing may block on the broker. Keep it off the agent's loop
+            # and its heartbeat executor, just like the other broker actions.
+            new_id = await offload(_submit, timeout=_SUBMIT_TIMEOUT)
+        except OffloadTimeoutError:
+            return indeterminate_timeout_result(
+                "rq.submit_task",
+                _SUBMIT_TIMEOUT,
+                hint="the task may still be enqueued",
+            )
         except Exception as exc:
             return CommandResult(status="failed", error=str(exc))
         return CommandResult(

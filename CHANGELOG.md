@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.11.0 (2026-09-10)
+
+* Add `z4j_rq.worker.Worker`, selected with RQ's `--worker-class` option, to
+  keep per-job environment assignments inside the forked child. This removes
+  the stock worker's retained native job-ID allocations on the tested glibc
+  stack without recycling the parent. Preserve upstream execution, timeouts,
+  retries, callbacks, shutdown and RQ 1.x/2.x process isolation. Installation
+  does not silently replace stock/custom workers; the fix targets POSIX fork
+  workers and keeps the existing RQ 1.10.1 compatibility floor.
+
+* Keep task submission off the agent event loop on the dedicated broker pool.
+  A publish that exceeds the bounded wait is explicitly indeterminate because
+  the broker operation can still complete; it is never automatically retried.
+
+* Align runtime version metadata and sibling dependency floors with the coordinated 1.11.0 release.
+
 ## 1.10.0 (2026-08-28)
 
 * Carried with the coordinated fleet release. No behaviour changed.
