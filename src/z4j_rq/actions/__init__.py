@@ -12,6 +12,8 @@ Implemented data-plane surface:
 - :func:`bulk_retry_action` - retry a bounded set of failed jobs.
 - :func:`requeue_dead_letter_action` - move jobs from RQ's failed registry
   back to their origin queue.
+- :func:`list_dead_letters_action` - page RQ's failed registry (the
+  ``dlq.list`` command) without deserialising any job payload.
 
 RQ does not expose remote worker restart, rate-limit, pool-size, or consumer
 operations, so those capabilities are not advertised.
@@ -24,13 +26,14 @@ from __future__ import annotations
 
 from z4j_rq.actions.bulk_retry import bulk_retry_action
 from z4j_rq.actions.cancel import cancel_task_action
-from z4j_rq.actions.dlq import requeue_dead_letter_action
+from z4j_rq.actions.dlq import list_dead_letters_action, requeue_dead_letter_action
 from z4j_rq.actions.purge import purge_queue_action
 from z4j_rq.actions.retry import retry_task_action
 
 __all__ = [
     "bulk_retry_action",
     "cancel_task_action",
+    "list_dead_letters_action",
     "purge_queue_action",
     "requeue_dead_letter_action",
     "retry_task_action",

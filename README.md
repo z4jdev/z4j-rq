@@ -15,7 +15,7 @@ z4j-rqscheduler to manage periodic schedules.
 - RQ 1.10.1+ and <3 (capped below the RQ 3.0 breaking-major rewrite)
 - Python 3.11+
 
-Full per-adapter matrix at <https://z4j.dev/reference/compatibility/>.
+Full per-adapter matrix at <https://docs.z4j.com/reference/compatibility/>.
 
 ## What it ships
 
@@ -76,7 +76,7 @@ pip install z4j-bare    z4j-rq z4j-rqscheduler   # framework-free worker
 
 ## Documentation
 
-Full docs at [z4j.dev/engines/rq/](https://z4j.dev/engines/rq/).
+Full docs at [docs.z4j.com/engines/rq/](https://docs.z4j.com/engines/rq/).
 
 ## License
 
@@ -87,7 +87,7 @@ The fork boundary adapted from RQ retains its BSD-2-Clause notice in
 ## Links
 
 - Homepage: https://z4j.com
-- Documentation: https://z4j.dev
+- Documentation: https://docs.z4j.com
 - PyPI: https://pypi.org/project/z4j-rq/
 - Issues: https://github.com/z4jdev/z4j-rq/issues
 - Changelog: [CHANGELOG.md](CHANGELOG.md)

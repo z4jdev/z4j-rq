@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.12.0 (2026-10-03)
+
+* Advertise `list_dead_letters`. The `dlq.list` command pages each queue's
+  `FailedJobRegistry` newest first with an offset cursor and never
+  deserialises a job payload, so pickled job data is not touched. Every
+  task id in the page is one `requeue_dead_letter` accepts.
+
 ## 1.11.0 (2026-09-10)
 
 * Add `z4j_rq.worker.Worker`, selected with RQ's `--worker-class` option, to

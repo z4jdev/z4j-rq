@@ -34,6 +34,7 @@ from typing import Any
 from z4j_core.errors import NotFoundError
 from z4j_core.models import (
     CommandResult,
+    DeadLetterPage,
     DiscoveryHints,
     Event,
     Queue,
@@ -49,6 +50,7 @@ from z4j_rq._offload import OffloadTimeoutError, indeterminate_timeout_result, o
 from z4j_rq.actions import (
     bulk_retry_action,
     cancel_task_action,
+    list_dead_letters_action,
     purge_queue_action,
     requeue_dead_letter_action,
     retry_task_action,
@@ -525,6 +527,23 @@ class RqEngineAdapter:
             task_name=task_name,
             override_args=override_args,
             override_kwargs=override_kwargs,
+        )
+
+    async def list_dead_letters(
+        self,
+        queue: str | None = None,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> DeadLetterPage:
+        """Page the ``FailedJobRegistry`` (see :func:`list_dead_letters_action`)."""
+        return await list_dead_letters_action(
+            self.rq_app,
+            queue=queue,
+            limit=limit,
+            cursor=cursor,
+            redaction=self.redaction,
+            engine_name=self.name,
         )
 
     # Honest absences below - these stay as loud failures because

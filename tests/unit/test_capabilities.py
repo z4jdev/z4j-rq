@@ -14,6 +14,8 @@ def test_default_capabilities_frozen() -> None:
     # v2026.5 GA capability set - see docs/MULTI_ENGINE_PLAN.md §5.
     # ``bulk_retry`` and ``requeue_dead_letter`` were originally
     # deferred but round-2 landed them in time for release.
+    # ``list_dead_letters`` is the read side of the failed registry
+    # (the ``dlq.list`` command).
     assert (
         frozenset(
             {
@@ -23,6 +25,7 @@ def test_default_capabilities_frozen() -> None:
                 "purge_queue",
                 "bulk_retry",
                 "requeue_dead_letter",
+                "list_dead_letters",
             },
         )
         == DEFAULT_CAPABILITIES

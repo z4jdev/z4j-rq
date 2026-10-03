@@ -296,6 +296,7 @@ class TestCapabilitiesDoNotLie:
             "purge_queue": "purge_queue",
             "bulk_retry": "bulk_retry",
             "requeue_dead_letter": "requeue_dead_letter",
+            "list_dead_letters": "list_dead_letters",
         }
         for cap in adapter.capabilities():
             method_name = method_for.get(cap)
