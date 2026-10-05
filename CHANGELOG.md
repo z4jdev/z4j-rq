@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.12.1 (2026-10-05)
+
+* The requirement is `rq>=1.10.1` with no upper bound. No code change.
+
 ## 1.12.0 (2026-10-03)
 
 * Advertise `list_dead_letters`. The `dlq.list` command pages each queue's

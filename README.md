@@ -12,7 +12,7 @@ z4j-rqscheduler to manage periodic schedules.
 
 ## Compatibility
 
-- RQ 1.10.1+ and <3 (capped below the RQ 3.0 breaking-major rewrite)
+- RQ 1.10.1+ (no upper bound)
 - Python 3.11+
 
 Full per-adapter matrix at <https://docs.z4j.com/reference/compatibility/>.
